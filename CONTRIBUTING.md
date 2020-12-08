@@ -29,7 +29,7 @@ You will be assigned to the issue eventually so that you (and anyone else) could
 * Follow idiomatic code principles for the language you’re using (RUST) and verify that by running *cargo clippy* command.
 * Respect design choices already made in the project until you build credibility to influence them.
 * Avoid adding new dependencies as much as possible. In doubtful cases - consult a maintainer.
-* **Pay attention to the Apache 2 license: don’t contribute anything encumbered by copyright or patent issues.** 
+* Pay attention to the MIT license: don’t contribute anything encumbered by copyright or patent issues.
 * Don't fix/improve unrelated problems in the same PR: submit another issue(s) instead.
 * Unit test(s) are required in this project. Integration tests are encouraged.
 You can modify an existing integration test to cover the new case.
