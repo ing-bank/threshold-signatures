@@ -219,7 +219,7 @@ The product is released under the terms of the MIT license. See LICENSE for more
 
 ## How to contribute
 
-[ *here should come a link to the "how to contribute" section of GitHub, GitLab or another SCM system where the code of this project is deployed to* ]
+See CONTRIBUTING.md
 
 ## Contact
 
