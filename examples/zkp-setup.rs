@@ -23,22 +23,19 @@ fn main() {
 
     let now = Instant::now();
 
+    let mut result = Vec::new();
+
     for _ in 0..n_iter {
         let setup = ZkpSetup::random(DEFAULT_GROUP_ORDER_BIT_LENGTH);
-        let setup_in_json = serde_json::to_string_pretty(&setup).unwrap();
         let public_setup = ZkpPublicSetup::from_private_zkp_setup(&setup);
         let verified = public_setup.verify();
         assert!(
             verified.is_ok(),
             format!("invalid public zkp setup: {:?}", verified.err())
         );
-
-        println!(">>>private version \n{}", setup_in_json);
-        println!(
-            ">>>public version \n{}",
-            serde_json::to_string_pretty(&public_setup).unwrap()
-        );
+        result.push(setup);
     }
+    println!("{}", serde_json::to_string_pretty(&result).unwrap());
 
     log::info!("generated in {} secs", now.elapsed().as_secs_f32());
 }
