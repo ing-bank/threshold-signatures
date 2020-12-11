@@ -117,15 +117,64 @@ The library consist of three main modules:
 
 #### Key generation 
 
-The machine is created by calling **::new** method provided with the instance of start phase **Phase1**. It is up to the implementor to select either the version of the machine which supports RUST futures or the one which uses contemporary mpcs channels from **crossbeam** crate. The example below uses the former one.   
+The example is taken from the test submodule of keygen module with some minor details omitted.
 
+The input for the protocol contains:
+*  Values of t and n in the threshold {t,n} 
+*  Party index of the node
+*  List of party indexes of all participants, including this node
+*  Initial keys - public part   
+*  Reference to a wallet: storage for initial keys
+*  A secret loader which fetches keys from the wallet
+*  Optional range proof setup
+*  Optional protocol timeout (recommended to be provided). 
+ 
+The first phase of the protocol is created by calling **Phase1::new()** method, which takes all the parameters above.
+
+The state machine is created next, with the following input:
+
+* Instance of Phase1
+* Instance of stream and instance of sink.  
+
+Two distinct versions of the state machine in this library support two types for stream/sink:
+* either StreamExt and SinkExt types from futures crate
+* or Sender and Receiver from crossbeam_channel crate.
+       
 ```
-   let own_party_index = PartyIndex::from_slice(&myself.0)?;
+   // set protocol parameters
+   let params = Parameters {
+                share_count: 3,
+                threshold: 1,
+            };
+   // collect list of parties
+   let parties : Vec<PartyIndex> = ...
+   // determine the party index of this node  
+   let own_party_index = ... 
+   // create initial random keys
    let init_keys = InitialKeys::random();
-   let start_phase = Box::new(Phase1::new(&parameters, init_keys, own_party_index));
-   // Channel to collect intermediate messages from the state machine.
+   let init_pub_keys = InitialPublicKeys::from(&init_keys);
+   // create some wallet (a peristence provider) and the secret loader
+   // secret loader acts as proxy fetching secret keys from the wallet 
+   // [see the example in ecds::keygen::test module]      
+   let shared_wallet = MyWallet::new(init_keys);    
+   let secret_loader = SecretKeyLoaderImpl::new(&shared_wallet, own_party_index);
+
+   let start_state = Box::new(Phase1::new(
+                    &params,
+                    init_pub_keys,
+                    range_proof_setup,
+                    parties.as_slice(),
+                    own_party_index,
+                    Arc::new(Box::new(secret_loader)),
+                    None,
+                )?);
+   
+   
+   // Channel to pick messages the state machine sends
    let (state_machine_sink, state_machine_stream) = mpsc::unbounded();
-   let state_machine = StateMachine::new(start_phase, session_stream, state_machine_sink);
+   // Channel to feed the machine
+   let (protocol_sink, protocol_stream) = mpsc::unbounded();
+   let state_machine = StateMachine::new(start_phase, protocol_stream, state_machine_sink);
    
    ...
    
@@ -145,8 +194,15 @@ The machine is created by calling **::new** method provided with the instance of
 
 ##### Signing
 
-The sequence of actions for signing is similar to keygen, but this time it requires **multi_party_shared_info**, the output of the keygen protocol, as well as the set of party ids **quorum**. 
-Note that signing protocol expects that a message is hashed and mapped to a field element externally (see module documentation in signature.rs).   
+The input of the protocol contains:
+* The hash of a message 
+* The output of keygen protocol, MultiPartyInfo structure
+* Party indexes of participants, including own party index. Note that the latter is stored in MultiPartyInfo. 
+
+The sequence of actions for signing is similar to keygen: first, the phase object is created, and then the state machine is.
+Similarly to the key generation protocol, state machine requires first phase and communication channels.
+
+Note that the signing protocol expects a message to be hashed outside of this library (see module documentation in signature.rs).   
 
 ```
      let mut hasher = Sha256::new();
@@ -172,17 +228,44 @@ Note that signing protocol expects that a message is hashed and mapped to a fiel
                 };
 ```   
 
-### Buidling documentation
+### Building the documentation
 
-As the code contains directives for rustdoc, where mathematical symbols are used, the documentation has to be built with predefined HTML header included into the project tree:
+The library uses LaTex mathematical symbols in the documentation so that embedded docs have to be built with predefined HTML header (included into the project):
 
 ```
 cargo rustdoc  --  --html-in-header katex.html --document-private-items
 ```      
 
-Note that the code is documented using *traditional rustdoc reference link style* so that the nightly build of rustdoc is not required.
+The nightly build of *rustdoc* is not required: the code is documented using traditional reference link style.
 
-## Secure usage 
+### Using examples
+
+#### The simulator of the key generation protocol 
+
+The complete result of the protocol can be obtained in JSON format by running the command:
+
+```cargo run --example keygen min_number_of_signers total_number_of_signers output_file_name_prefix  [--use-range-proofs]```
+
+The run results in creating  #total_number_of_signers# files containing MultiPartyInfo structure serialized into JSON.
+File names can be tweaked by *output_file_name_prefix*.
+
+#### The generator of zero knowledge range proof setup
+
+Recall that the ZKRP setup requires safe primes, for which the algorithm is not particularly fast.
+If the generation of new ZKRP setups for each new key has to be avoided, then setups have to be pre-computed.  
+The following command generates as many as **n**  setups and prints them to the standard output:
+
+``` cargo run  --release --example  zkp-setup n  >outfile.json ```
+  
+
+#### The safe prime generator
+
+Safe primes used in ZKRP can also be generated independently by the following command, where n is desired number of pairs of safe primes:
+
+``` cargo run  --release --example safe-primes n  >outfile.json ```
+
+
+## Securing an application
 
 * The library-wrapping application has to provide a secure reliable way of authenticating nodes during initial connection, as well as a secure messaging.
 For example, the application can use TLS protocol to establish initial peer-to-peer connections between nodes known to each other  by their public certificates,
@@ -221,7 +304,7 @@ The product is released under the terms of the MIT license. See LICENSE for more
 
 See CONTRIBUTING.md
 
-## Contact
+## Contacts
 
 <oleg.burundukov@ing.com>
 
