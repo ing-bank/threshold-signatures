@@ -244,6 +244,7 @@ pub struct ZkpPublicSetup {
     pub h1: BigInt,
     pub h2: BigInt,
     pub dlog_proof: ZkpSetupProof,
+    pub inv_dlog_proof: ZkpSetupProof,
 }
 
 /// The non-interactive proof of correctness of zero knowledge range proof setup.
@@ -294,19 +295,19 @@ impl ZkpSetup {
     /// Generates new zero knowledge range proof setup.
     /// Uses Fujisaki - Okamoto bit commitment scheme, "Statistical zero knowledge protocols to prove modular polynomial relations"
     pub fn random(group_order_bit_length: usize) -> Self {
-        use crate::algorithms::sample_generator_of_safe_rsa_group;
+        use crate::algorithms::sample_generator_of_rsa_group;
         let bit_length = group_order_bit_length / 2;
 
         // Fujisaki-Okamoto commitment scheme setup
         let mut primes = pair_of_safe_primes(bit_length);
         let N_tilda = primes.p.borrow() * primes.q.borrow();
-        let b0 = sample_generator_of_safe_rsa_group(&primes.p, &primes.q);
-        // the order of the group mod p*q, where p,q safe primes
-        let mut fi = &primes.p_prim * &primes.q_prim * &BigInt::from(4);
-        let alpha = BigInt::sample_below(&fi);
+        let b0 = sample_generator_of_rsa_group(&primes.p, &primes.q);
+        // the order of the subgroup
+        let mut subgroup_fi = &primes.p_prim * &primes.q_prim;
+        let alpha = BigInt::sample_below(&subgroup_fi);
         let b1 = b0.powm(alpha.borrow(), &N_tilda);
 
-        fi.zeroize_bn();
+        subgroup_fi.zeroize_bn();
         let result = Self {
             p: primes.p.clone(),
             q: primes.q.clone(),
@@ -331,40 +332,60 @@ impl ZkpPublicSetup {
     ///
     ///  Creates new public setup and generates Schnorr's proof of knowledge of discrete logarithm problem
     pub fn from_private_zkp_setup(setup: &ZkpSetup) -> Self {
-        let One = &BigInt::one();
-
-        let mut v: BigInt = BigInt::sample_range(One, &(&setup.N_tilda - One));
-        let V = setup.h1.powm(v.borrow(), setup.N_tilda.borrow());
-        let challenge = HSha512Trunc256::create_hash(&[&setup.N_tilda, &V, &setup.h1, &setup.h2]);
-
-        let r: BigInt = v.borrow() - (&setup.alpha * challenge.borrow());
-        v.zeroize_bn();
-
+        let one = &BigInt::one();
+        let two = &BigInt::from(2);
+        let mut subgroup_fi = ((&setup.p - one) / two) * ((&setup.q - one) / two);
+        let inv_alpha = &setup
+            .alpha
+            .invert(&subgroup_fi)
+            .expect("alpha non invertible");
+        subgroup_fi.zeroize_bn();
         Self {
             N_tilda: setup.N_tilda.clone(),
             h1: setup.h1.clone(),
             h2: setup.h2.clone(),
-            dlog_proof: ZkpSetupProof { V, challenge, r },
+            dlog_proof: Self::dlog_proof(&setup.N_tilda, &setup.h1, &setup.h2, &setup.alpha),
+            inv_dlog_proof: Self::dlog_proof(&setup.N_tilda, &setup.h2, &setup.h1, &inv_alpha),
         }
+    }
+
+    pub fn dlog_proof(N_tilda: &BigInt, h1: &BigInt, h2: &BigInt, dlog: &BigInt) -> ZkpSetupProof {
+        let One = &BigInt::one();
+
+        let mut v: BigInt = BigInt::sample_range(One, &(N_tilda - One));
+        let V = h1.powm(&v, &N_tilda);
+        let challenge = HSha512Trunc256::create_hash(&[N_tilda, &V, h1, h2]);
+
+        let r: BigInt = &v - (dlog * &challenge);
+        v.zeroize_bn();
+
+        ZkpSetupProof { V, challenge, r }
     }
     /// verifies public setup
     ///
     /// verifies public setup using classic Schnorr's proof
     pub fn verify(&self) -> Result<(), ZkpSetupVerificationError> {
-        let challenge =
-            HSha512Trunc256::create_hash(&[&self.N_tilda, &self.dlog_proof.V, &self.h1, &self.h2]);
+        Self::verify_proof(&self.N_tilda, &self.h1, &self.h2, &self.dlog_proof)?;
+        Self::verify_proof(&self.N_tilda, &self.h2, &self.h1, &self.inv_dlog_proof)?;
+        Ok(())
+    }
+    pub fn verify_proof(
+        N_tilda: &BigInt,
+        h1: &BigInt,
+        h2: &BigInt,
+        proof: &ZkpSetupProof,
+    ) -> Result<(), ZkpSetupVerificationError> {
+        let challenge = HSha512Trunc256::create_hash(&[N_tilda, &proof.V, h1, h2]);
 
-        if challenge != self.dlog_proof.challenge {
+        if challenge != proof.challenge {
             return Err(ZkpSetupVerificationError(
-                "challenge does not match".to_string(),
+                "dlog proof: challenge does not match".to_string(),
             ));
         }
 
-        let V = self.h1.powm(&self.dlog_proof.r, &self.N_tilda)
-            * self.h2.powm(&challenge, &self.N_tilda)
-            % self.N_tilda.borrow();
+        let V = h1.powm(&proof.r, N_tilda) * h2.powm(&challenge, N_tilda) % N_tilda;
 
-        if V == self.dlog_proof.V {
+        if V == proof.V {
             Ok(())
         } else {
             Err(ZkpSetupVerificationError("Dlog proof failed".to_string()))
