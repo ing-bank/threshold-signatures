@@ -45,12 +45,12 @@ pub fn crt_solver(reminders: &[&BigInt], moduli: &[&BigInt]) -> BigInt {
     result % n
 }
 
-/// Samples a generator from RSA group made of two safe primes
+/// Samples a generator from RSA group modulo product of two safe primes
 ///
-/// Samples elements from cyclic subgroups of both input groups modulo safe prime.
-/// Finds the generator of the RSA group by using CRT
+/// Samples elements from two cyclic subgroups modulo prime p = (P-1)/2.
+/// Finds the generator using CRT
 ///
-pub fn sample_generator_of_safe_rsa_group(safe_p: &BigInt, safe_q: &BigInt) -> BigInt {
+pub fn sample_generator_of_rsa_group(safe_p: &BigInt, safe_q: &BigInt) -> BigInt {
     let One = &BigInt::one();
     let Two = &BigInt::from(2);
 
