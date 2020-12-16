@@ -5,20 +5,21 @@
 The project contains the implementation of the multiparty threshold signature scheme constructed by Rosario Gennaro and Steven Goldfeder [1].
 The scheme consists of three algorithms performed in a distributed context: a key generation with N parties,
 an arbitrary message signing with a subgroup of [(t+1) of N] parties holding the key,
-and the key resharing with (t+1) parties resulting in a new group of M players holding new shares of the same private signing key. 
+and the key resharing with (t+1) parties resulting in a new group of M players holding new shares of the same private signing key.
 
-The scheme uses the curve **secp256k1**. 
+This README file focuses on sharing detailed technical information about the library. Check our whitepaper [5] for theoretical backgrounds.  
 
 ## Motivation
 
-Elliptic curve digital signature algorithm (ECDSA) is used extensively for crypto-currencies such as Bitcoin and  Ethereum to sign transactions. 
+Elliptic curve digital signature algorithm (ECDSA) is used extensively for crypto-currencies such as Bitcoin and  Ethereum to sign transactions.  
 Multiparty threshold signing adds a possibility to create crypto-currency wallets that are controlled by multiple
 parties. Transactions which originate from these wallets require collaborative work to sign.
 Threshold signing produces standard signature output,
 and it preserves the privacy of signers by not disclosing their identities, unlike multi-signature does.
 The algorithm used in this product eliminates a central dealer( the party which generates the full key and distributes shards of it to parties). 
 
-As the MPC TS technology has become increasingly popular in the last 2 years, there are quite a few open-source implementations that can be found.
+As the MPC TS technology has become increasingly popular in the last 2 years, there are quite a few open-source implementations.
+The detailed review of them can be found in [6].
 Our version improves existing solutions by addition of several key features:
 * The protocols collect all results of every verification step instead of aborting that step when a first error occurs.
  All errors are packed in a container and reported back to a caller of the machine after the machine stops. 
@@ -280,22 +281,25 @@ the state machine code can be used alone for this purpose.
 
 ## Other tech remarks
 
+* The library uses the curve *secp256k1* only. Using other curves is possible but requires the code to be rebuilt.  
 * The library does not implement a network transport layer.
 * The library's internal architecture relies on the notion of a PartyID, an identifier of a party.
 * The library emits messages of 2 types, broadcast and peer2peer so that the transport layer has to forward them to other parties accordingly.
 
 * The application has to deliver broadcasts reliably so that when a party sends a broadcast it's guaranteed that each party receives the same message. 
 
-
 ## References
-\[1\] Gennaro, R., Goldfeder, S.: Fast multiparty threshold ecdsa with fast trustless setup. In: Proceedings of the 2018 ACM SIGSAC Conference on Computer and Communications Security. pp. 1179–1194. ACM (2018) 
-https://eprint.iacr.org/2019/114.pdf
+\[1\] Gennaro, R., Goldfeder, S.: [Fast multiparty threshold ecdsa with fast trustless setup.](https://eprint.iacr.org/2019/114.pdf)  
 
 \[2\] Shamir, A.: How to share a secret. Communications of the ACM 22(11), 612–613 (1979)
 
 \[3\] Paillier, P.: Public-key cryptosystems based on composite degree residuosity classes. In: International Conference on the Theory and Applications of Cryptographic Techniques. pp. 223–238. Springer
 
 \[4\] Eiichiro Fujisaki, Tatsuaki Okamoto: Statistical zero knowledge protocols to prove modular polynomial relations. Advances in Cryptology — CRYPTO '97 pp16-30
+
+\[5\] Tillem, G., Burundukov, O.: [Threshold signatures using Secure Multiparty Computation.](https://new.ingwb.com/binaries/content/assets/insights/themes/distributed-ledger-technology/ing-releases-multiparty-threshold-signing-library-to-improve-customer-security/threshold-signatures-using-secure-multiparty-computation.pdf)   
+
+\[6\] Aumasson, J.P, Hamelink, A., Shlomovits, O.: [A Survey of ECDSA Threshold Signing.](https://eprint.iacr.org/2020/1390.pdf)
 
 ## License 
 The product is released under the terms of the MIT license. See LICENSE for more information.
