@@ -393,6 +393,14 @@ impl ZkpPublicSetup {
     }
 }
 
+#[trace(pretty)]
+impl Zeroize for ZkpPublicSetup {
+    fn zeroize(&mut self) {
+        self.N_tilda.zeroize_bn();
+        self.h1.zeroize_bn();
+        self.h2.zeroize_bn();
+    }
+}
 /// First message of `MtA` protocol that Alice sends to Bob
 ///
 /// Contains ...
@@ -404,7 +412,7 @@ pub struct MessageA {
 #[trace(pretty, prefix = "MessageA::")]
 impl MessageA {
     // a - Alice 's secret
-    pub fn new(a: &FE, alice_pk: &EncryptionKey, alice_setup: Option<&ZkpSetup>) -> MessageA {
+    pub fn new(a: &FE, alice_pk: &EncryptionKey, bob_setup: Option<&ZkpPublicSetup>) -> MessageA {
         let mut r = BigInt::from_paillier_key(&alice_pk);
         let cipher = Paillier::encrypt_with_chosen_randomness(
             alice_pk,
@@ -414,7 +422,7 @@ impl MessageA {
         .0
         .into_owned();
 
-        let proof = alice_setup.map(|zkp_setup| {
+        let proof = bob_setup.map(|zkp_setup| {
             AliceProof::generate(&a.to_big_int(), &cipher, alice_pk, zkp_setup, &r, &FE::q())
         });
 
@@ -432,7 +440,7 @@ impl MessageA {
 /// New data have to be generated for each proof
 struct AliceZkpInit {
     alice_pk: EncryptionKey,
-    alice_setup: ZkpSetup,
+    bob_setup: ZkpPublicSetup,
     pub alpha: BigInt,
     pub beta: BigInt,
     pub gamma: BigInt,
@@ -444,7 +452,7 @@ impl Zeroize for AliceZkpInit {
     fn zeroize(&mut self) {
         self.alice_pk.n.zeroize_bn();
         self.alice_pk.nn.zeroize_bn();
-        self.alice_setup.zeroize();
+        self.bob_setup.zeroize();
         self.alpha.zeroize_bn();
         self.beta.zeroize_bn();
         self.gamma.zeroize_bn();
@@ -465,18 +473,18 @@ impl AliceZkpInit {
     ///
     ///  `alice_pk` - Alice's Paillier public key
     ///
-    ///  `alice_setup` - Alice's ZKP setup
+    ///  `bob_setup` - Bob's ZKP setup
     ///
     ///  `q` - modulo of the elliptic group used in ECDSA
     ///
-    fn random(alice_pk: &EncryptionKey, alice_setup: &ZkpSetup, q: &BigInt) -> Self {
+    fn random(alice_pk: &EncryptionKey, bob_setup: &ZkpPublicSetup, q: &BigInt) -> Self {
         Self {
             alice_pk: alice_pk.clone(),
-            alice_setup: alice_setup.clone(),
+            bob_setup: bob_setup.clone(),
             alpha: BigInt::sample_below(&q.pow(3)),
             beta: BigInt::from_paillier_key(&alice_pk),
-            gamma: BigInt::sample_below(&(q.pow(3) * &alice_setup.N_tilda)),
-            ro: BigInt::sample_below(&(q * &alice_setup.N_tilda)),
+            gamma: BigInt::sample_below(&(q.pow(3) * &bob_setup.N_tilda)),
+            ro: BigInt::sample_below(&(q * &bob_setup.N_tilda)),
         }
     }
     pub fn N(&self) -> &BigInt {
@@ -486,13 +494,13 @@ impl AliceZkpInit {
         &self.alice_pk.nn
     }
     pub fn N_tilda(&self) -> &BigInt {
-        &self.alice_setup.N_tilda
+        &self.bob_setup.N_tilda
     }
     pub fn h1(&self) -> &BigInt {
-        &self.alice_setup.h1
+        &self.bob_setup.h1
     }
     pub fn h2(&self) -> &BigInt {
-        &self.alice_setup.h2
+        &self.bob_setup.h2
     }
 }
 
@@ -554,11 +562,11 @@ impl AliceProof {
         &self,
         cipher: &BigInt,
         alice_ek: &EncryptionKey,
-        alice_zkp_setup: &ZkpPublicSetup,
+        bob_zkp_setup: &ZkpSetup,
     ) -> bool {
         let N = &alice_ek.n;
         let NN = &alice_ek.nn;
-        let N_tilda = &alice_zkp_setup.N_tilda;
+        let N_tilda = &bob_zkp_setup.N_tilda;
         let Gen = alice_ek.n.borrow() + 1;
 
         let e = HSha512Trunc256::create_hash_with_nonce(
@@ -583,8 +591,8 @@ impl AliceProof {
         }
         let z_e_inv = z_e_inv.unwrap();
 
-        let wprim = (alice_zkp_setup.h1.powm(&self.s1, N_tilda)
-            * alice_zkp_setup.h2.powm(&self.s2, N_tilda)
+        let wprim = (bob_zkp_setup.h1.powm(&self.s1, N_tilda)
+            * bob_zkp_setup.h2.powm(&self.s2, N_tilda)
             * z_e_inv)
             % N_tilda;
 
@@ -617,11 +625,11 @@ impl AliceProof {
         a: &BigInt,
         cipher: &BigInt,
         alice_pk: &EncryptionKey,
-        alice_zkp_setup: &ZkpSetup,
+        bob_zkp_setup: &ZkpPublicSetup,
         r: &BigInt,
         q: &BigInt,
     ) -> Self {
-        let init = AliceZkpInit::random(alice_pk, alice_zkp_setup, q);
+        let init = AliceZkpInit::random(alice_pk, bob_zkp_setup, q);
         let round1 = AliceZkpRound1::from(&init, a);
 
         let Gen = init.N() + 1;
@@ -677,7 +685,7 @@ impl MessageB {
     pub fn new(
         b: &FE,
         alice_ek: &EncryptionKey,
-        bob_zkp_setup: Option<&ZkpSetup>,
+        alice_zkp_setup: Option<&ZkpPublicSetup>,
         alice_msg: &MessageA,
         mta_mode: MTAMode,
     ) -> (MessageB, FE) {
@@ -703,7 +711,7 @@ impl MessageB {
         let beta_prim_fe: FE = ECScalar::from(&beta_prim);
         let beta = FE::zero().sub(&beta_prim_fe.get_element());
 
-        let proof = match &bob_zkp_setup {
+        let proof = match &alice_zkp_setup {
             Some(zkp_setup) => {
                 // generate range proof
                 match mta_mode {
@@ -752,7 +760,7 @@ impl MessageB {
 /// internal data unique to every Bob's proof
 struct BobZkpInit {
     pub alice_ek: EncryptionKey,
-    pub bob_setup: ZkpSetup,
+    pub alice_setup: ZkpPublicSetup,
     pub alpha: BigInt,
     pub beta: BigInt,
     pub gamma: BigInt,
@@ -766,7 +774,7 @@ impl Zeroize for BobZkpInit {
     fn zeroize(&mut self) {
         self.alice_ek.n.zeroize_bn();
         self.alice_ek.nn.zeroize_bn();
-        self.bob_setup.zeroize();
+        self.alice_setup.zeroize();
         self.alpha.zeroize_bn();
         self.beta.zeroize_bn();
         self.gamma.zeroize_bn();
@@ -784,17 +792,17 @@ impl Drop for BobZkpInit {
 }
 
 impl BobZkpInit {
-    fn random(alice_ek: &EncryptionKey, bob_setup: &ZkpSetup, q: &BigInt) -> Self {
+    fn random(alice_ek: &EncryptionKey, alice_setup: &ZkpPublicSetup, q: &BigInt) -> Self {
         Self {
             alice_ek: alice_ek.clone(),
-            bob_setup: bob_setup.clone(),
+            alice_setup: alice_setup.clone(),
             alpha: BigInt::sample_below(&q.pow(3)),
             beta: BigInt::from_paillier_key(&alice_ek),
             gamma: Randomness::sample(&alice_ek).0,
-            ro: BigInt::sample_below(&(q * bob_setup.N_tilda.borrow())),
-            ro_prim: BigInt::sample_below(&(q.pow(3) * bob_setup.N_tilda.borrow())),
-            sigma: BigInt::sample_below(&(q * bob_setup.N_tilda.borrow())),
-            tau: BigInt::sample_below(&(q * bob_setup.N_tilda.borrow())),
+            ro: BigInt::sample_below(&(q * alice_setup.N_tilda.borrow())),
+            ro_prim: BigInt::sample_below(&(q.pow(3) * alice_setup.N_tilda.borrow())),
+            sigma: BigInt::sample_below(&(q * alice_setup.N_tilda.borrow())),
+            tau: BigInt::sample_below(&(q * alice_setup.N_tilda.borrow())),
         }
     }
     fn N(&self) -> &BigInt {
@@ -807,13 +815,13 @@ impl BobZkpInit {
         &self.alice_ek.nn
     }
     pub fn N_tilda(&self) -> &BigInt {
-        &self.bob_setup.N_tilda
+        &self.alice_setup.N_tilda
     }
     pub fn h1(&self) -> &BigInt {
-        &self.bob_setup.h1
+        &self.alice_setup.h1
     }
     pub fn h2(&self) -> &BigInt {
-        &self.bob_setup.h2
+        &self.alice_setup.h2
     }
 }
 
@@ -902,7 +910,7 @@ impl BobProof {
         a_enc: &BigInt,
         mta_avc_out: &BigInt,
         alice_ek: &EncryptionKey,
-        bob_zkp_setup: &ZkpPublicSetup,
+        alice_setup: &ZkpSetup,
     ) -> bool {
         let Gen = alice_ek.n.borrow() + 1;
         let e = HSha512Trunc256::create_hash_with_nonce(
@@ -920,7 +928,7 @@ impl BobProof {
             &self.e.1,
         );
 
-        self.verify_with_hash(&e, a_enc, mta_avc_out, alice_ek, bob_zkp_setup)
+        self.verify_with_hash(&e, a_enc, mta_avc_out, alice_ek, alice_setup)
     }
     pub fn verify_with_hash(
         &self,
@@ -928,13 +936,13 @@ impl BobProof {
         a_enc: &BigInt,
         mta_avc_out: &BigInt,
         alice_ek: &EncryptionKey,
-        bob_zkp_setup: &ZkpPublicSetup,
+        alice_setup: &ZkpSetup,
     ) -> bool {
         let N = &alice_ek.n;
         let NN = &alice_ek.nn;
-        let N_tilda = &bob_zkp_setup.N_tilda;
-        let h1 = &bob_zkp_setup.h1;
-        let h2 = &bob_zkp_setup.h2;
+        let N_tilda = &alice_setup.N_tilda;
+        let h1 = &alice_setup.h1;
+        let h2 = &alice_setup.h2;
 
         if *e != self.e {
             log::trace!("hash doesn't match");
@@ -976,11 +984,11 @@ impl BobProof {
         b: &FE,
         beta_prim: &BigInt,
         alice_ek: &EncryptionKey,
-        bob_zkp_keys: &ZkpSetup,
+        alice_setup: &ZkpPublicSetup,
         r: &Randomness,
         q: &BigInt,
     ) -> BobProof {
-        let init = BobZkpInit::random(alice_ek, &bob_zkp_keys, q);
+        let init = BobZkpInit::random(alice_ek, &alice_setup, q);
         let round1 = BobZkpRound1::from(&init, b, beta_prim, a_encrypted);
 
         let e = HSha512Trunc256::create_hash_with_random_nonce(&[
@@ -1029,7 +1037,7 @@ impl BobProofExt {
         a_enc: &BigInt,
         mta_avc_out: &BigInt,
         alice_ek: &EncryptionKey,
-        bob_zkp_setup: &ZkpPublicSetup,
+        alice_zkp_setup: &ZkpSetup,
     ) -> bool {
         let Gen = alice_ek.n.borrow() + 1;
         let e = HSha512Trunc256::create_hash_with_nonce(
@@ -1054,7 +1062,7 @@ impl BobProofExt {
         // check basic proof first
         if !self
             .proof
-            .verify_with_hash(&e, a_enc, mta_avc_out, alice_ek, bob_zkp_setup)
+            .verify_with_hash(&e, a_enc, mta_avc_out, alice_ek, alice_zkp_setup)
         {
             return false;
         }
@@ -1081,11 +1089,11 @@ impl BobProofExt {
         b: &FE,
         beta_prim: &BigInt,
         alice_ek: &EncryptionKey,
-        bob_zkp_keys: &ZkpSetup,
+        alice_setup: &ZkpPublicSetup,
         r: &Randomness,
         q: &BigInt,
     ) -> BobProofExt {
-        let init = BobZkpInit::random(alice_ek, &bob_zkp_keys, q);
+        let init = BobZkpInit::random(alice_ek, &alice_setup, q);
 
         let (X, u) = {
             let ec_gen: GE = ECPoint::generator();
@@ -1188,24 +1196,23 @@ mod tests {
     fn alice_zkp() {
         let _ = env_logger::builder().is_test(true).try_init();
 
+        let bob_setup = ZkpSetup::random(DEFAULT_GROUP_ORDER_BIT_LENGTH);
+        let bob_public_setup = ZkpPublicSetup::from_private_zkp_setup(&bob_setup);
+
         // Alice private
-        let (message, public_paillier_key, public_zkp_setup) = {
+        let (message, public_paillier_key) = {
             let paillier_keys = PaillierKeys::random();
-
             let a = FE::new_random();
-            let zkp_keys = ZkpSetup::random(DEFAULT_GROUP_ORDER_BIT_LENGTH);
-
             (
-                MessageA::new(&a, &paillier_keys.ek, Some(&zkp_keys)),
+                MessageA::new(&a, &paillier_keys.ek, Some(&bob_public_setup)),
                 paillier_keys.ek.clone(),
-                ZkpPublicSetup::from_private_zkp_setup(&zkp_keys),
             )
         };
 
         assert!(message.range_proof.is_some());
         let proof = message.range_proof.unwrap();
         // Bob
-        assert!(proof.verify(&message.c, &public_paillier_key, &public_zkp_setup));
+        assert!(proof.verify(&message.c, &public_paillier_key, &bob_setup));
     }
 
     pub struct AliceOrBob {
@@ -1227,7 +1234,7 @@ mod tests {
         let _ = env_logger::builder().is_test(true).try_init();
 
         let alice = (AliceOrBob::new(), FE::new_random());
-        let _alice_public_zkp_setup = &ZkpPublicSetup::from_private_zkp_setup(&alice.0.zkp_setup);
+        let alice_public_zkp_setup = &ZkpPublicSetup::from_private_zkp_setup(&alice.0.zkp_setup);
         let alice_public_key = &alice.0.paillier_keys.ek;
         let bob = (AliceOrBob::new(), FE::new_random());
         let bob_public_zkp_setup = &ZkpPublicSetup::from_private_zkp_setup(&bob.0.zkp_setup);
@@ -1236,14 +1243,14 @@ mod tests {
         let msga = MessageA::new(
             &alice.1,
             &alice.0.paillier_keys.ek,
-            Some(&alice.0.zkp_setup),
+            Some(&bob_public_zkp_setup),
         );
 
         // Bob  proves
         let (msgb, _beta) = MessageB::new(
             &bob.1,
             alice_public_key,
-            Some(&bob.0.zkp_setup),
+            Some(alice_public_zkp_setup),
             &msga,
             MTAMode::MtAwc,
         );
@@ -1251,7 +1258,7 @@ mod tests {
         match msgb.proof {
             BobProofType::RangeProofExt(proof) => {
                 // Alice verifies
-                assert!(proof.verify(&msga.c, &msgb.c, alice_public_key, &bob_public_zkp_setup));
+                assert!(proof.verify(&msga.c, &msgb.c, alice_public_key, &alice.0.zkp_setup));
             }
             _ => assert!(false, ""),
         }

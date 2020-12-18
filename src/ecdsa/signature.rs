@@ -86,8 +86,9 @@ use crate::state_machine::{State, StateMachineTraits, Transition};
 use std::time::Duration;
 
 use crate::algorithms::zkp::MTAMode::{MtA, MtAwc};
-use crate::algorithms::zkp::{AliceProof, BobProofType, MessageA, MessageB, ZkpPublicSetup};
+use crate::algorithms::zkp::{AliceProof, BobProofType, MessageA, MessageB};
 use crate::ecdsa::keygen::RangeProofSetups;
+use crate::ecdsa::signature::mta::MtaAliceOutput;
 use paillier::{Decrypt, EncryptionKey, Paillier, RawCiphertext};
 use std::iter::FromIterator;
 use trace::trace;
@@ -104,12 +105,11 @@ pub enum SigningError {
         party: PartyIndex,
     },
     #[fail(
-        display = "Range proof from Alice, her setup or key not found, party {:?}, setup {:?}, proof {:?}, key {:?} ",
-        party, setup, proof, key
+        display = "Range proof from Alice, her setup or key not found, party {:?}, proof {:?}, key {:?} ",
+        party, proof, key
     )]
     AliceRangeProofIncomplete {
         party: PartyIndex,
-        setup: Option<ZkpPublicSetup>,
         proof: Option<AliceProof>,
         key: Option<EncryptionKey>,
     },
@@ -123,8 +123,9 @@ pub enum SigningError {
         party: PartyIndex,
         proof: BobProofType,
     },
-    #[fail(display = "Bob setup not found, party {:?} ", party)]
-    BobSetupNotFound { party: PartyIndex },
+
+    #[fail(display = "Local zkp setup not found, party {:?} ", party)]
+    LocalZkpSetupNotFound { party: PartyIndex },
 
     #[fail(display = "missing p1 commitment from party {}", _0)]
     MissingPhase1Commitment(PartyIndex),
@@ -159,24 +160,35 @@ mod mta {
         RawCiphertext, SigningError,
     };
     use crate::algorithms::zkp::BobProofType::{RangeProof, RangeProofExt};
-    use crate::algorithms::zkp::ZkpPublicSetup;
+    use crate::algorithms::zkp::{MessageA, ZkpSetup};
     use crate::ecdsa::PaillierKeys;
     use curv::cryptographic_primitives::proofs::sigma_dlog::{DLogProof, ProveDLog};
     use curv::elliptic::curves::traits::{ECPoint, ECScalar};
     use curv::{FE, GE};
+    use std::collections::HashMap;
 
+    #[derive(Debug, Clone)]
+    pub enum MtaAliceOutput {
+        Simple(MessageA),
+        WithRangeProofs(HashMap<PartyIndex, MessageA>),
+    }
     /// Verifies `AliceProof`
     #[trace(pretty)]
     pub(crate) fn verify_alice_range_proof(
         cipher: &BigInt,
         party: &PartyIndex,
-        alice_setup: Option<&ZkpPublicSetup>,
+        bob_setup: Option<&ZkpSetup>,
         proof: Option<&AliceProof>,
         alice_ek: Option<&EncryptionKey>,
     ) -> Result<(), SigningError> {
-        match (alice_setup, proof, alice_ek) {
-            (Some(alice_setup), Some(proof), Some(enc_key)) => {
-                if proof.verify(cipher, &enc_key, alice_setup) {
+        if bob_setup.is_none() {
+            return Err(SigningError::LocalZkpSetupNotFound { party: *party });
+        }
+        let bob_setup = bob_setup.unwrap();
+
+        match (proof, alice_ek) {
+            (Some(proof), Some(enc_key)) => {
+                if proof.verify(cipher, &enc_key, bob_setup) {
                     Ok(())
                 } else {
                     Err(SigningError::AliceProofFailed {
@@ -186,9 +198,8 @@ mod mta {
                 }
             }
 
-            (setup, proof, key) => Err(SigningError::AliceRangeProofIncomplete {
+            (proof, key) => Err(SigningError::AliceRangeProofIncomplete {
                 party: *party,
-                setup: setup.cloned(),
                 proof: proof.cloned(),
                 key: key.cloned(),
             }),
@@ -207,14 +218,11 @@ mod mta {
         a: &FE,
         a_enc: &BigInt,
         alice_keys: &PaillierKeys,
-        bob_setup: Option<&ZkpPublicSetup>,
+        alice_setup: Option<&ZkpSetup>,
     ) -> Result<FE, Vec<SigningError>> {
         match proof {
-            RangeProof(_) if bob_setup.is_none() => {
-                return Err(vec![SigningError::BobSetupNotFound { party: *party }])
-            }
-            RangeProofExt(_) if bob_setup.is_none() => {
-                return Err(vec![SigningError::BobSetupNotFound { party: *party }])
+            RangeProof(_) | RangeProofExt(_) if alice_setup.is_none() => {
+                return Err(vec![SigningError::LocalZkpSetupNotFound { party: *party }])
             }
             _ => {}
         }
@@ -251,7 +259,7 @@ mod mta {
             }
             // Bob's range proof
             RangeProof(range_proof) => {
-                if !range_proof.verify(a_enc, &mta_output, &alice_keys.ek, &bob_setup.unwrap()) {
+                if !range_proof.verify(a_enc, &mta_output, &alice_keys.ek, &alice_setup.unwrap()) {
                     errors.push(SigningError::BobProofFailed {
                         party: *party,
                         proof: proof.clone(),
@@ -260,7 +268,7 @@ mod mta {
             }
             // Bob's range proof with proof of knowing b and beta_prim
             RangeProofExt(range_proof) => {
-                if !range_proof.verify(a_enc, &mta_output, &alice_keys.ek, &bob_setup.unwrap()) {
+                if !range_proof.verify(a_enc, &mta_output, &alice_keys.ek, &alice_setup.unwrap()) {
                     errors.push(SigningError::BobProofFailed {
                         party: *party,
                         proof: proof.clone(),
@@ -479,7 +487,7 @@ pub struct Phase1 {
     other_parties: BTreeSet<PartyIndex>,
     gamma_i: FE,
     k_i: FE,
-    mta_a: MessageA,
+    mta_a: MtaAliceOutput,
     comm_scheme: CommitmentScheme,
     timeout: Option<Duration>,
 }
@@ -498,14 +506,24 @@ impl Phase1 {
         timeout: Option<Duration>,
     ) -> Result<Self, SigningError> {
         let k_i = ECScalar::new_random();
-        let mta_a = MessageA::new(
-            &k_i,
-            &multi_party_info.own_he_keys.ek,
-            multi_party_info
-                .range_proof_setups
-                .as_ref()
-                .map(|s| &s.my_setup),
-        );
+
+        let mta_a = if let Some(setups) = &multi_party_info.range_proof_setups {
+            MtaAliceOutput::WithRangeProofs(
+                setups
+                    .party_setups
+                    .iter()
+                    .map(|(p, setup)| {
+                        (
+                            *p,
+                            MessageA::new(&k_i, &multi_party_info.own_he_keys.ek, Some(setup)),
+                        )
+                    })
+                    .collect::<HashMap<_, _>>(),
+            )
+        } else {
+            MtaAliceOutput::Simple(MessageA::new(&k_i, &multi_party_info.own_he_keys.ek, None))
+        };
+
         let gamma_i: FE = ECScalar::new_random();
         let g: GE = ECPoint::generator();
         let g_gamma_i = g * gamma_i;
@@ -598,7 +616,7 @@ impl Phase1 {
                 match mta::verify_alice_range_proof(
                     &msg.c,
                     party,
-                    range_proof_setup.party_setups.get(party),
+                    Some(&range_proof_setup.my_setup),
                     msg.range_proof.as_ref(),
                     self.multi_party_info.party_he_keys.get(party),
                 ) {
@@ -619,13 +637,26 @@ impl Phase1 {
 impl State<SigningTraits> for Phase1 {
     fn start(&mut self) -> Option<OutMsgVec> {
         log::info!("Phase 1 starts");
-        let output = vec![OutMsg {
-            recipient: Address::Broadcast,
-            body: Message::R1(SignBroadcastPhase1 {
-                com: self.comm_scheme.comm.clone(),
-                mta_a: self.mta_a.clone(),
-            }),
-        }];
+
+        let output = match &self.mta_a {
+            MtaAliceOutput::Simple(msg) => vec![OutMsg {
+                recipient: Address::Broadcast,
+                body: Message::R1(SignBroadcastPhase1 {
+                    com: self.comm_scheme.comm.clone(),
+                    mta_a: msg.clone(),
+                }),
+            }],
+            MtaAliceOutput::WithRangeProofs(map) => map
+                .iter()
+                .map(|(p, msg)| OutMsg {
+                    recipient: Address::Peer(*p),
+                    body: Message::R1(SignBroadcastPhase1 {
+                        com: self.comm_scheme.comm.clone(),
+                        mta_a: msg.clone(),
+                    }),
+                })
+                .collect::<Vec<_>>(),
+        };
         Some(output)
     }
 
@@ -706,7 +737,7 @@ struct Phase2a {
     k_i: FE,
     comm_scheme: CommitmentScheme,
     commitments: HashMap<PartyIndex, BigInt>,
-    mta_a: MessageA,
+    mta_a: MtaAliceOutput,
     mta_inputs: HashMap<PartyIndex, MessageA>,
     beta_outputs: HashMap<PartyIndex, FE>,
     timeout: Option<Duration>,
@@ -719,16 +750,16 @@ impl State<SigningTraits> for Phase2a {
         let mut result = Vec::new();
         for (party, messageA) in &self.mta_inputs {
             if let Some(party_ek) = self.multi_party_info.party_he_keys.get(party) {
-                let bob_zkp_setup = self
+                let alice_zkp_setup = self
                     .multi_party_info
                     .range_proof_setups
                     .as_ref()
-                    .map(|s| &s.my_setup);
+                    .map(|s| s.party_setups.get(party).expect("zkp setup not found"));
 
                 let (message, beta_prime) = MessageB::new(
                     &self.gamma_i,
                     party_ek,
-                    bob_zkp_setup,
+                    alice_zkp_setup,
                     messageA,
                     MtA, // first round of Mta goes without extra checks
                 );
@@ -777,20 +808,27 @@ impl State<SigningTraits> for Phase2a {
 
         let mut alpha_vec = Vec::new();
         for (party, msg) in &responses {
-            let bob_setup = self
+            let my_setup = self
                 .multi_party_info
                 .range_proof_setups
                 .as_ref()
-                .and_then(|s| s.party_setups.get(party));
+                .map(|s| &s.my_setup);
+
+            let mta_a_message = match &self.mta_a {
+                MtaAliceOutput::Simple(msg_a) => msg_a,
+                MtaAliceOutput::WithRangeProofs(map) => {
+                    map.get(party).expect("zkp setup not found")
+                }
+            };
 
             match mta::verify_bob_range_proof(
                 party,
                 &msg.proof,
                 &msg.c,
                 &self.k_i,
-                &self.mta_a.c,
+                &mta_a_message.c,
                 &self.multi_party_info.own_he_keys,
-                bob_setup,
+                my_setup,
             ) {
                 Ok(alpha) => alpha_vec.push(alpha),
                 Err(ve) => errors.extend(ve),
@@ -853,7 +891,7 @@ struct Phase2b {
     w_i: FE,
     comm_scheme: CommitmentScheme,
     commitments: HashMap<PartyIndex, BigInt>,
-    mta_a: MessageA,
+    mta_a: MtaAliceOutput,
     mta_inputs: HashMap<PartyIndex, MessageA>,
     delta_i: FE,
     omega_outputs: HashMap<PartyIndex, FE>,
@@ -887,13 +925,13 @@ impl State<SigningTraits> for Phase2b {
         let mut result = Vec::new();
         for (party, messageA) in &self.mta_inputs {
             if let Some(party_ek) = self.multi_party_shared_info.party_he_keys.get(party) {
-                let bob_zkp_setup = self
+                let alice_zkp_setup = self
                     .multi_party_shared_info
                     .range_proof_setups
                     .as_ref()
-                    .map(|s| &s.my_setup);
+                    .map(|s| s.party_setups.get(party).expect("zkp setup not found"));
                 let (message, beta_prime) =
-                    MessageB::new(&self.w_i, party_ek, bob_zkp_setup, messageA, MtAwc);
+                    MessageB::new(&self.w_i, party_ek, alice_zkp_setup, messageA, MtAwc);
                 self.omega_outputs.insert(*party, beta_prime);
                 result.push(OutMsg {
                     recipient: Address::Peer(*party),
@@ -938,20 +976,27 @@ impl State<SigningTraits> for Phase2b {
 
         let mut alpha_vec = Vec::new();
         for (party, msg) in &responses {
-            let bob_setup = self
+            let my_setup = self
                 .multi_party_shared_info
                 .range_proof_setups
                 .as_ref()
-                .and_then(|s| s.party_setups.get(party));
+                .map(|s| &s.my_setup);
+
+            let mta_a_message = match &self.mta_a {
+                MtaAliceOutput::Simple(msg_a) => msg_a,
+                MtaAliceOutput::WithRangeProofs(map) => {
+                    map.get(party).expect("zkp setup not found")
+                }
+            };
 
             match mta::verify_bob_range_proof(
                 party,
                 &msg.proof,
                 &msg.c,
                 &self.k_i,
-                &self.mta_a.c,
+                &mta_a_message.c,
                 &self.multi_party_shared_info.own_he_keys,
-                bob_setup,
+                my_setup,
             ) {
                 Ok(alpha) => alpha_vec.push(alpha),
                 Err(ve) => errors.extend(ve),
