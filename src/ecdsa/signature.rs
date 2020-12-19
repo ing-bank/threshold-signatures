@@ -65,7 +65,7 @@ use super::messages::signing::{
     SignBroadcastPhase1, SignDecommitPhase4,
 };
 use super::signature::phase5::LocalSignature;
-use crate::ecdsa::{CommitmentScheme, MessageHashType, SigningParameters};
+use crate::ecdsa::{is_valid_public_key, CommitmentScheme, MessageHashType, SigningParameters};
 use crate::protocol::{Address, PartyIndex};
 
 use curv::cryptographic_primitives::hashing::hash_sha256::HSha256;
@@ -142,6 +142,8 @@ pub enum SigningError {
     SignatureVerificationFailed,
     #[fail(display = "protocol setup error: {}", _0)]
     ProtocolSetupError(String),
+    #[fail(display = "invalid public key {}", point)]
+    InvalidPublicKey { point: String },
     #[fail(display = "{}", _0)]
     GeneralError(String),
 }
@@ -505,30 +507,6 @@ impl Phase1 {
         parties: &[PartyIndex],
         timeout: Option<Duration>,
     ) -> Result<Self, SigningError> {
-        let k_i = ECScalar::new_random();
-
-        let mta_a = if let Some(setups) = &multi_party_info.range_proof_setups {
-            MtaAliceOutput::WithRangeProofs(
-                setups
-                    .party_setups
-                    .iter()
-                    .map(|(p, setup)| {
-                        (
-                            *p,
-                            MessageA::new(&k_i, &multi_party_info.own_he_keys.ek, Some(setup)),
-                        )
-                    })
-                    .collect::<HashMap<_, _>>(),
-            )
-        } else {
-            MtaAliceOutput::Simple(MessageA::new(&k_i, &multi_party_info.own_he_keys.ek, None))
-        };
-
-        let gamma_i: FE = ECScalar::new_random();
-        let g: GE = ECPoint::generator();
-        let g_gamma_i = g * gamma_i;
-        let comm_scheme = CommitmentScheme::from_GE(&g_gamma_i);
-
         let signing_parties = BTreeSet::from_iter(parties.iter().cloned());
         if signing_parties.len() != parties.len() {
             return Err(SigningError::ProtocolSetupError(
@@ -573,6 +551,36 @@ impl Phase1 {
                 missing_points
             )));
         }
+
+        let public_key = multi_party_info.public_key.get_element();
+        if !is_valid_public_key(public_key) {
+            return Err(SigningError::InvalidPublicKey {
+                point: format!("{:?}", public_key),
+            });
+        }
+        let k_i = ECScalar::new_random();
+
+        let mta_a = if let Some(setups) = &multi_party_info.range_proof_setups {
+            MtaAliceOutput::WithRangeProofs(
+                setups
+                    .party_setups
+                    .iter()
+                    .map(|(p, setup)| {
+                        (
+                            *p,
+                            MessageA::new(&k_i, &multi_party_info.own_he_keys.ek, Some(setup)),
+                        )
+                    })
+                    .collect::<HashMap<_, _>>(),
+            )
+        } else {
+            MtaAliceOutput::Simple(MessageA::new(&k_i, &multi_party_info.own_he_keys.ek, None))
+        };
+
+        let gamma_i: FE = ECScalar::new_random();
+        let g: GE = ECPoint::generator();
+        let g_gamma_i = g * gamma_i;
+        let comm_scheme = CommitmentScheme::from_GE(&g_gamma_i);
 
         Ok(Phase1 {
             params: SigningParameters {
