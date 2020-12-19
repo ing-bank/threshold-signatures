@@ -113,9 +113,11 @@ use curv::{BigInt, FE, GE};
 use crate::ecdsa::messages::{FeldmanVSS, SecretShare};
 
 use super::nizk;
-use crate::ecdsa::{CommitmentScheme, InitialPublicKeys, PaillierKeys, Parameters};
+use crate::ecdsa::{
+    from_secp256k1_pk, is_valid_public_key, CommitmentScheme, InitialPublicKeys, PaillierKeys,
+    Parameters,
+};
 use crate::protocol::{Address, PartyIndex};
-use curv::elliptic::curves::secp256_k1::Secp256k1Point;
 use failure::Fail;
 pub use paillier::DecryptionKey;
 use paillier::EncryptionKey;
@@ -188,6 +190,8 @@ pub enum KeygenError {
     MultiplePointsUsed { points: String },
     #[fail(display = "received point has wrong X coordinate: {}", x_coord)]
     WrongXCoordinate { x_coord: usize },
+    #[fail(display = "invalid public key {}, party {}", point, party)]
+    InvalidPublicKey { point: String, party: PartyIndex },
     #[fail(display = "unexpected message {:?}, party {}", message_type, party)]
     UnknownMessageType {
         message_type: Message,
@@ -695,6 +699,31 @@ impl State<KeyGeneratorTraits> for Phase2 {
         }]))
     }
 }
+/// Computes the sum of points on the curve and validates every point
+/// Uses PublicKey type from underlying secp256k1 library to work around limited API in curv crate
+fn try_computing_public_key(
+    pubkey_map: &HashMap<PartyIndex, GE>,
+) -> (Option<curv::PK>, Vec<KeygenError>) {
+    let acc: Option<curv::PK> = None;
+    pubkey_map
+        .iter()
+        .fold((acc, Vec::new()), |(acc, mut evec), point| {
+            if is_valid_public_key(point.1.get_element()) {
+                if let Some(v) = acc {
+                    if let Ok(sum) = v.combine(&point.1.get_element()) {
+                        return (Some(sum), evec);
+                    }
+                } else {
+                    return (Some(point.1.get_element()), evec);
+                }
+            }
+            evec.push(KeygenError::InvalidPublicKey {
+                point: format!("{:?} {:?}", point.1.get_element(),pubkey_map),
+                party: *point.0,
+            });
+            (acc, evec)
+        })
+}
 
 /// Third phase of the protocol: broadcasts Shamir's shares with Feldman's proofs and verifies them
 struct Phase3 {
@@ -790,16 +819,13 @@ impl State<KeyGeneratorTraits> for Phase3 {
 
         shares.values_mut().for_each(|x| x.zeroize());
 
-        let public_key = self
-            .pubkey_map
-            .iter()
-            .fold(None, |acc, (_party, key)| {
-                Some(acc.map_or_else(
-                    || Secp256k1Point::from_coor(&key.x_coor().unwrap(), &key.y_coor().unwrap()),
-                    |sum| sum + key,
-                ))
-            })
-            .expect("Points must add up");
+        let (public_key, pk_verification_errors) = try_computing_public_key(&self.pubkey_map);
+        errors.extend(pk_verification_errors);
+        if public_key.is_none() {
+            errors.push(KeygenError::GeneralError(
+                "cant reconstruct public key".to_string(),
+            ))
+        }
 
         let dk = self.secret_key_loader.get_paillier_secret();
         if let Err(e) = &dk {
@@ -809,7 +835,11 @@ impl State<KeyGeneratorTraits> for Phase3 {
             log::error!("Phase3 returns errors {:?}", errors);
             return Transition::FinalState(Err(ErrorState::new(errors)));
         }
-        let mut dk = dk.unwrap();
+        let mut dk = dk.expect("invalid paillier decryption key");
+
+        let public_key = from_secp256k1_pk(public_key.expect("cant compute public key"))
+            .expect("invalid full public key");
+
         let points = self
             .other_points
             .iter()
