@@ -65,7 +65,9 @@ use super::messages::signing::{
     SignBroadcastPhase1, SignDecommitPhase4,
 };
 use super::signature::phase5::LocalSignature;
-use crate::ecdsa::{CommitmentScheme, MessageHashType, PaillierKeys, SigningParameters};
+use crate::ecdsa::{
+    is_valid_curve_point, CommitmentScheme, MessageHashType, PaillierKeys, SigningParameters,
+};
 use crate::protocol::{Address, PartyIndex};
 
 use curv::cryptographic_primitives::hashing::hash_sha256::HSha256;
@@ -142,6 +144,8 @@ pub enum SigningError {
     SignatureVerificationFailed,
     #[fail(display = "protocol setup error: {}", _0)]
     ProtocolSetupError(String),
+    #[fail(display = "invalid public key {}", point)]
+    InvalidPublicKey { point: String },
     #[fail(display = "{}", _0)]
     GeneralError(String),
 }
@@ -505,12 +509,6 @@ impl Phase1 {
         parties: &[PartyIndex],
         timeout: Option<Duration>,
     ) -> Result<Self, SigningError> {
-        let k_i = ECScalar::new_random();
-        let gamma_i: FE = ECScalar::new_random();
-        let g: GE = ECPoint::generator();
-        let g_gamma_i = g * gamma_i;
-        let comm_scheme = CommitmentScheme::from_GE(&g_gamma_i);
-
         let signing_parties = BTreeSet::from_iter(parties.iter().cloned());
         if signing_parties.len() != parties.len() {
             return Err(SigningError::ProtocolSetupError(
@@ -565,6 +563,15 @@ impl Phase1 {
                 &multi_party_info.own_he_keys
             )));
         }
+
+        let public_key = multi_party_info.public_key.get_element();
+        if !is_valid_curve_point(public_key) {
+            return Err(SigningError::InvalidPublicKey {
+                point: format!("{:?}", public_key),
+            });
+        }
+        let k_i = ECScalar::new_random();
+
         let mta_a = if let Some(setups) = &multi_party_info.range_proof_setups {
             MtaAliceOutput::WithRangeProofs(
                 setups
@@ -581,6 +588,11 @@ impl Phase1 {
         } else {
             MtaAliceOutput::Simple(MessageA::new(&k_i, &multi_party_info.own_he_keys.ek, None))
         };
+
+        let gamma_i: FE = ECScalar::new_random();
+        let g: GE = ECPoint::generator();
+        let g_gamma_i = g * gamma_i;
+        let comm_scheme = CommitmentScheme::from_GE(&g_gamma_i);
 
         Ok(Phase1 {
             params: SigningParameters {
@@ -1202,7 +1214,8 @@ impl State<SigningTraits> for Phase4 {
                         .clone(),
                     decomm: msg.blind_factor.clone(),
                 };
-                if foreign_comm_scheme.verify_commitment(msg.g_gamma_i)
+                if is_valid_curve_point(msg.g_gamma_i.get_element())
+                    && foreign_comm_scheme.verify_commitment(msg.g_gamma_i)
                     && DLogProof::verify(&msg.gamma_proof).is_ok()
                 // TODO : map 2 possible bad outcomes into 2 errors
                 {
@@ -1296,7 +1309,10 @@ impl Phase5ab {
             comm: comm.clone(),
             decomm: msg.blind_factor.clone(),
         };
-        if scheme.verify_hash(&input_hash) {
+        if scheme.verify_hash(&input_hash)
+            && is_valid_curve_point(msg.A_i.get_element())
+            && is_valid_curve_point(msg.V_i.get_element())
+        {
             Ok(())
         } else {
             Err(SigningError::InvalidDecommitment { party: *party })
