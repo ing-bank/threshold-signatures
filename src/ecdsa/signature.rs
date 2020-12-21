@@ -65,7 +65,9 @@ use super::messages::signing::{
     SignBroadcastPhase1, SignDecommitPhase4,
 };
 use super::signature::phase5::LocalSignature;
-use crate::ecdsa::{is_valid_public_key, CommitmentScheme, MessageHashType, SigningParameters};
+use crate::ecdsa::{
+    is_valid_public_key, CommitmentScheme, MessageHashType, PaillierKeys, SigningParameters,
+};
 use crate::protocol::{Address, PartyIndex};
 
 use curv::cryptographic_primitives::hashing::hash_sha256::HSha256;
@@ -558,6 +560,17 @@ impl Phase1 {
                 point: format!("{:?}", public_key),
             });
         }
+
+        if !PaillierKeys::is_valid(
+            &multi_party_info.own_he_keys.ek,
+            &multi_party_info.own_he_keys.dk,
+        ) {
+            return Err(SigningError::ProtocolSetupError(format!(
+                "invalid own Paillier key {}",
+                &multi_party_info.own_he_keys
+            )));
+        }
+
         let k_i = ECScalar::new_random();
 
         let mta_a = if let Some(setups) = &multi_party_info.range_proof_setups {
