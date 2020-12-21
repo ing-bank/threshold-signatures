@@ -65,7 +65,7 @@ use super::messages::signing::{
     SignBroadcastPhase1, SignDecommitPhase4,
 };
 use super::signature::phase5::LocalSignature;
-use crate::ecdsa::{CommitmentScheme, MessageHashType, SigningParameters};
+use crate::ecdsa::{CommitmentScheme, MessageHashType, PaillierKeys, SigningParameters};
 use crate::protocol::{Address, PartyIndex};
 
 use curv::cryptographic_primitives::hashing::hash_sha256::HSha256;
@@ -506,24 +506,6 @@ impl Phase1 {
         timeout: Option<Duration>,
     ) -> Result<Self, SigningError> {
         let k_i = ECScalar::new_random();
-
-        let mta_a = if let Some(setups) = &multi_party_info.range_proof_setups {
-            MtaAliceOutput::WithRangeProofs(
-                setups
-                    .party_setups
-                    .iter()
-                    .map(|(p, setup)| {
-                        (
-                            *p,
-                            MessageA::new(&k_i, &multi_party_info.own_he_keys.ek, Some(setup)),
-                        )
-                    })
-                    .collect::<HashMap<_, _>>(),
-            )
-        } else {
-            MtaAliceOutput::Simple(MessageA::new(&k_i, &multi_party_info.own_he_keys.ek, None))
-        };
-
         let gamma_i: FE = ECScalar::new_random();
         let g: GE = ECPoint::generator();
         let g_gamma_i = g * gamma_i;
@@ -573,6 +555,32 @@ impl Phase1 {
                 missing_points
             )));
         }
+
+        if !PaillierKeys::is_valid(
+            &multi_party_info.own_he_keys.ek,
+            &multi_party_info.own_he_keys.dk,
+        ) {
+            return Err(SigningError::ProtocolSetupError(format!(
+                "invalid own Paillier key {}",
+                &multi_party_info.own_he_keys
+            )));
+        }
+        let mta_a = if let Some(setups) = &multi_party_info.range_proof_setups {
+            MtaAliceOutput::WithRangeProofs(
+                setups
+                    .party_setups
+                    .iter()
+                    .map(|(p, setup)| {
+                        (
+                            *p,
+                            MessageA::new(&k_i, &multi_party_info.own_he_keys.ek, Some(setup)),
+                        )
+                    })
+                    .collect::<HashMap<_, _>>(),
+            )
+        } else {
+            MtaAliceOutput::Simple(MessageA::new(&k_i, &multi_party_info.own_he_keys.ek, None))
+        };
 
         Ok(Phase1 {
             params: SigningParameters {

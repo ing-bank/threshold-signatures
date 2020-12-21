@@ -15,9 +15,11 @@ use curv::cryptographic_primitives::commitments::traits::Commitment;
 use curv::elliptic::curves::traits::{ECPoint, ECScalar};
 use curv::{BigInt, FE, GE};
 use paillier::{
-    Decrypt, DecryptionKey, EncryptionKey, KeyGeneration, Paillier, RawCiphertext, RawPlaintext,
+    is_prime, Decrypt, DecryptionKey, EncryptionKey, KeyGeneration, Paillier, RawCiphertext,
+    RawPlaintext,
 };
 use serde::{Deserialize, Serialize};
+use std::borrow::Borrow;
 use std::collections::BTreeSet;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
@@ -225,6 +227,13 @@ impl PaillierKeys {
     /// decrypts given value `c`
     pub fn decrypt(&self, c: BigInt) -> RawPlaintext {
         Paillier::decrypt(&self.dk, &RawCiphertext::from(c))
+    }
+
+    pub fn is_valid(ek: &EncryptionKey, dk: &DecryptionKey) -> bool {
+        is_prime(&dk.p)
+            && is_prime(&dk.q)
+            && ek.n == dk.p.borrow() * dk.q.borrow()
+            && ek.nn == ek.n.pow(2)
     }
 }
 
