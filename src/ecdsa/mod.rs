@@ -171,6 +171,15 @@ impl InitialPublicKeys {
     }
 }
 
+fn is_valid_public_key(pk: curv::PK) -> bool {
+    curv::PK::from_slice(&pk.serialize_uncompressed()).is_ok()
+}
+
+fn from_secp256k1_pk(pk: curv::PK) -> Result<GE, curv::ErrorKey> {
+    let bytes = pk.serialize_uncompressed();
+    GE::from_bytes(&bytes[1..])
+}
+
 /// Public/private key pair for additive homomorphic encryption schema
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct PaillierKeys {
@@ -269,19 +278,23 @@ pub struct Signature {
 impl Signature {
     /// verifies the signature using public key and the hash of the message
     pub fn verify(&self, pubkey: &GE, message: &MessageHashType) -> bool {
-        let g: GE = ECPoint::generator();
+        if self.s == FE::zero() || self.r == FE::zero() {
+            false
+        } else {
+            let g: GE = ECPoint::generator();
 
-        let s_invert = self.s.invert();
-        let u1 = (*message) * s_invert;
-        let u2 = self.r * s_invert;
+            let s_invert = self.s.invert();
+            let u1 = (*message) * s_invert;
+            let u2 = self.r * s_invert;
 
-        self.r
-            == ECScalar::from(
-                &(g * u1 + pubkey * &u2)
-                    .x_coor()
-                    .unwrap()
-                    .mod_floor(&FE::q()),
-            )
+            self.r
+                == ECScalar::from(
+                    &(g * u1 + pubkey * &u2)
+                        .x_coor()
+                        .unwrap()
+                        .mod_floor(&FE::q()),
+                )
+        }
     }
 }
 
@@ -382,7 +395,61 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::ecdsa::is_beta_subset_of_alpha;
+    use crate::ecdsa::{is_beta_subset_of_alpha, is_valid_public_key};
+    use curv::arithmetic::traits::Converter;
+    use curv::arithmetic::traits::Samplable;
+    use curv::elliptic::curves::traits::ECPoint;
+    use curv::elliptic::curves::traits::ECScalar;
+    use curv::{BigInt, FE, GE};
+
+    fn xy_to_key_slice(x: &BigInt, y: &BigInt) -> Vec<u8> {
+        let mut v = vec![4 as u8];
+        let mut raw_x: Vec<u8> = Vec::new();
+        let mut raw_y: Vec<u8> = Vec::new();
+
+        let x_vec = BigInt::to_vec(x);
+        let y_vec = BigInt::to_vec(y);
+        raw_x.extend(vec![0u8; 32 - x_vec.len()]);
+        raw_x.extend(x_vec);
+
+        raw_y.extend(vec![0u8; 32 - y_vec.len()]);
+        raw_y.extend(y_vec);
+
+        v.extend(raw_x);
+        v.extend(raw_y);
+        v
+    }
+
+    #[test]
+    fn pk_utilities() {
+        let pk = GE::random_point().get_element();
+
+        let bytes = pk.serialize_uncompressed();
+        let ppk = curv::PK::from_slice(&bytes);
+        assert!(ppk.is_ok());
+        let ppk = ppk.unwrap();
+        assert_eq!(pk, ppk);
+
+        assert!(is_valid_public_key(GE::random_point().get_element()));
+
+        let xpk = xy_to_key_slice(
+            &BigInt::sample_below(&FE::q()),
+            &BigInt::sample_below(&FE::q()),
+        );
+
+        let xppk = curv::PK::from_slice(xpk.as_slice());
+        assert!(xppk.is_err());
+    }
+
+    #[test]
+    fn pk_conversion() {
+        let pk = GE::random_point().get_element();
+        let bytes = pk.serialize_uncompressed();
+        let ge = GE::from_bytes(&bytes[1..]);
+        assert!(ge.is_ok());
+        let ge = ge.unwrap();
+        assert_eq!(pk, ge.get_element());
+    }
 
     #[test]
     fn test_subsets() {
