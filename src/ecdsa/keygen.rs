@@ -358,6 +358,11 @@ impl Phase1 {
         let dk = secret_key_loader
             .get_paillier_secret()
             .map_err(|e| KeygenError::ProtocolSetupError(e.0))?;
+        if !PaillierKeys::is_valid(&init_keys.paillier_encryption_key, &dk) {
+            return Err(KeygenError::ProtocolSetupError(
+                "invalid own Paillier key".to_string(),
+            ));
+        }
         let proof = nizk::gen_proof(dk);
         let scheme = CommitmentScheme::from_GE(&init_keys.y_i);
 
@@ -801,10 +806,20 @@ impl State<KeyGeneratorTraits> for Phase3 {
             })
             .expect("Points must add up");
 
-        let dk = self.secret_key_loader.get_paillier_secret();
-        if let Err(e) = &dk {
-            errors.push(KeygenError::GeneralError(e.0.clone()))
-        }
+        let dk = match self.secret_key_loader.get_paillier_secret() {
+            Ok(dk) if PaillierKeys::is_valid(&self.keys.paillier_encryption_key, &dk) => Some(dk),
+            Err(e) => {
+                errors.push(KeygenError::GeneralError(e.0));
+                None
+            }
+            _ => {
+                errors.push(KeygenError::ProtocolSetupError(
+                    "invalid Paillier key".to_string(),
+                ));
+                None
+            }
+        };
+
         if !errors.is_empty() {
             log::error!("Phase3 returns errors {:?}", errors);
             return Transition::FinalState(Err(ErrorState::new(errors)));
