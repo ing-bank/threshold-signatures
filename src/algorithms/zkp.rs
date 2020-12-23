@@ -208,6 +208,7 @@ pub struct ZkpSetupVerificationError(String);
 pub struct ZkpSetup {
     p: BigInt,
     q: BigInt,
+    order: BigInt,
     alpha: BigInt,
     pub N_tilda: BigInt,
     pub h1: BigInt,
@@ -220,6 +221,7 @@ impl Zeroize for ZkpSetup {
     fn zeroize(&mut self) {
         self.p.zeroize_bn();
         self.q.zeroize_bn();
+        self.order.zeroize_bn();
         self.alpha.zeroize_bn();
         self.N_tilda.zeroize_bn();
         self.h1.zeroize_bn();
@@ -303,14 +305,14 @@ impl ZkpSetup {
         let N_tilda = primes.p.borrow() * primes.q.borrow();
         let b0 = sample_generator_of_rsa_group(&primes.p, &primes.q);
         // the order of the subgroup
-        let mut subgroup_fi = &primes.p_prim * &primes.q_prim;
-        let alpha = BigInt::sample_below(&subgroup_fi);
+        let order = &primes.p_prim * &primes.q_prim;
+        let alpha = BigInt::sample_range(&BigInt::one(), &order);
         let b1 = b0.powm(alpha.borrow(), &N_tilda);
 
-        subgroup_fi.zeroize_bn();
         let result = Self {
             p: primes.p.clone(),
             q: primes.q.clone(),
+            order,
             alpha,
             N_tilda,
             h1: b0,
@@ -319,9 +321,29 @@ impl ZkpSetup {
         primes.zeroize();
         result
     }
+    //#[trace(disable(dlog), disable(order))]
+    pub fn dlog_proof(
+        N_tilda: &BigInt,
+        h1: &BigInt,
+        h2: &BigInt,
+        dlog: &BigInt,
+        order: &BigInt,
+    ) -> ZkpSetupProof {
+        let One = &BigInt::one();
+
+        let mut v: BigInt = BigInt::sample_range(One, &(N_tilda - One));
+        let V = h1.powm(&v, &N_tilda);
+        let challenge = HSha512Trunc256::create_hash(&[N_tilda, &V, h1, h2]);
+
+        let r: BigInt = &v - (dlog * &challenge);
+        let r = r % order;
+        v.zeroize_bn();
+
+        ZkpSetupProof { V, challenge, r }
+    }
 
     #[cfg(test)]
-    pub fn verify(&self) -> bool {
+    pub fn verify_setup(&self) -> bool {
         self.h2 == self.h1.powm(&self.alpha, &self.N_tilda)
     }
 }
@@ -332,35 +354,31 @@ impl ZkpPublicSetup {
     ///
     ///  Creates new public setup and generates Schnorr's proof of knowledge of discrete logarithm problem
     pub fn from_private_zkp_setup(setup: &ZkpSetup) -> Self {
-        let one = &BigInt::one();
-        let two = &BigInt::from(2);
-        let mut subgroup_fi = ((&setup.p - one) / two) * ((&setup.q - one) / two);
         let inv_alpha = &setup
             .alpha
-            .invert(&subgroup_fi)
+            .invert(&setup.order)
             .expect("alpha non invertible");
-        subgroup_fi.zeroize_bn();
         Self {
             N_tilda: setup.N_tilda.clone(),
             h1: setup.h1.clone(),
             h2: setup.h2.clone(),
-            dlog_proof: Self::dlog_proof(&setup.N_tilda, &setup.h1, &setup.h2, &setup.alpha),
-            inv_dlog_proof: Self::dlog_proof(&setup.N_tilda, &setup.h2, &setup.h1, &inv_alpha),
+            dlog_proof: ZkpSetup::dlog_proof(
+                &setup.N_tilda,
+                &setup.h1,
+                &setup.h2,
+                &setup.alpha,
+                &setup.order,
+            ),
+            inv_dlog_proof: ZkpSetup::dlog_proof(
+                &setup.N_tilda,
+                &setup.h2,
+                &setup.h1,
+                &inv_alpha,
+                &setup.order,
+            ),
         }
     }
 
-    pub fn dlog_proof(N_tilda: &BigInt, h1: &BigInt, h2: &BigInt, dlog: &BigInt) -> ZkpSetupProof {
-        let One = &BigInt::one();
-
-        let mut v: BigInt = BigInt::sample_range(One, &(N_tilda - One));
-        let V = h1.powm(&v, &N_tilda);
-        let challenge = HSha512Trunc256::create_hash(&[N_tilda, &V, h1, h2]);
-
-        let r: BigInt = &v - (dlog * &challenge);
-        v.zeroize_bn();
-
-        ZkpSetupProof { V, challenge, r }
-    }
     /// verifies public setup
     ///
     /// verifies public setup using classic Schnorr's proof
@@ -1269,7 +1287,7 @@ mod tests {
         let _ = env_logger::builder().is_test(true).try_init();
 
         let setup = ZkpSetup::random(DEFAULT_GROUP_ORDER_BIT_LENGTH);
-        assert!(setup.verify());
+        assert!(setup.verify_setup());
         let pub_setup = ZkpPublicSetup::from_private_zkp_setup(&setup);
         if let Err(e) = pub_setup.verify() {
             log::error!("{}", e);
