@@ -29,7 +29,6 @@ use zeroize::Zeroize;
 
 pub mod keygen;
 pub mod messages;
-mod nizk;
 pub mod resharing;
 pub mod signature;
 
@@ -267,7 +266,7 @@ impl Debug for PaillierKeys {
 }
 
 ///current recommended bit size for the primes in Paillier schema
-const PRIME_BIT_LENGTH_IN_PAILLIER_SCHEMA: usize = 1024;
+pub(crate) const PRIME_BIT_LENGTH_IN_PAILLIER_SCHEMA: usize = 1024;
 
 /// The result of ECDSA signing algorithm
 ///

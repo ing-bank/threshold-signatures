@@ -112,12 +112,13 @@ use curv::{BigInt, FE, GE};
 
 use crate::ecdsa::messages::{FeldmanVSS, SecretShare};
 
-use super::nizk;
+use crate::algorithms::nizk_rsa;
 use crate::ecdsa::{
     from_secp256k1_pk, is_valid_curve_point, CommitmentScheme, InitialPublicKeys, PaillierKeys,
     Parameters,
 };
 use crate::protocol::{Address, PartyIndex};
+use curv::elliptic::curves::secp256_k1::Secp256k1Point;
 use failure::Fail;
 pub use paillier::DecryptionKey;
 use paillier::EncryptionKey;
@@ -367,7 +368,7 @@ impl Phase1 {
                 "invalid own Paillier key".to_string(),
             ));
         }
-        let proof = nizk::gen_proof(dk);
+        let proof = nizk_rsa::gen_proof(dk);
         let scheme = CommitmentScheme::from_GE(&init_keys.y_i);
 
         let acting_parties = BTreeSet::from_iter(parties.iter().cloned());
@@ -583,7 +584,7 @@ impl State<KeyGeneratorTraits> for Phase2 {
             .commitments
             .iter()
             .filter_map(|(party, msg)| {
-                if nizk::verify(&msg.e, &msg.correct_key_proof.0).is_err() {
+                if nizk_rsa::verify(&msg.e, &msg.correct_key_proof.0).is_err() {
                     Some(KeygenError::InvalidCorrectKeyProof {
                         proof: format!("{:?}", msg.correct_key_proof),
                         party: *party,

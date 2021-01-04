@@ -393,12 +393,13 @@ pub mod old_member {
 }
 /// Contains the protocol part performed by a member of new committee
 pub mod new_member {
+    use crate::algorithms::nizk_rsa;
     use crate::ecdsa::keygen::{CorrectKeyProof, MultiPartyInfo, Party2PointMap, RangeProofSetups};
     use crate::ecdsa::messages::resharing::{Phase1Broadcast, Phase2Broadcast, VSS};
     use crate::ecdsa::resharing::{
         map_parties_to_shares, to_hash_map_gen, ErrorState, InMsg, Message, OutMsg, ResharingError,
     };
-    use crate::ecdsa::{all_mapped_equal, nizk, PaillierKeys, PRIME_BIT_LENGTH_IN_PAILLIER_SCHEMA};
+    use crate::ecdsa::{all_mapped_equal, PaillierKeys, PRIME_BIT_LENGTH_IN_PAILLIER_SCHEMA};
     use crate::protocol::{Address, PartyIndex};
     use crate::state_machine::{State, StateMachineTraits, Transition};
     use crate::Parameters;
@@ -680,7 +681,7 @@ pub mod new_member {
                 .range_proof_setup
                 .as_ref()
                 .map(|s| ZkpPublicSetup::from_private_zkp_setup(s));
-            let proof = nizk::gen_proof(self.my_paillier_keys.dk.clone());
+            let proof = nizk_rsa::gen_proof(self.my_paillier_keys.dk.clone());
             #[allow(clippy::if_not_else)]
             let output = self
                 .previous_phase
@@ -720,7 +721,7 @@ pub mod new_member {
                     let mut errors = input
                         .iter()
                         .filter_map(|(party, msg)| {
-                            if nizk::verify(&msg.ek, &msg.correct_key_proof.0).is_err() {
+                            if nizk_rsa::verify(&msg.ek, &msg.correct_key_proof.0).is_err() {
                                 Some(ResharingError::InvalidCorrectKeyProof {
                                     proof: format!("{:?}", msg.correct_key_proof),
                                     party: *party,
