@@ -35,7 +35,7 @@ use std::convert::TryFrom;
 const SALT: &str = "459561513849871375704710178795731042296906667021449863746459528082436944578977";
 
 /// Parameters are as suggested in 6.2.3 of [link](https://eprint.iacr.org/2018/987.pdf)
-const M2: usize = 11;
+pub(crate) const M2: usize = 11;
 
 /// Corresponds to $`\alpha = 6370 `$ (as in the whitepaper)
 const PRIMORIAL: &str = r#"448716517440091362481155430816405474137858544178420501606558338757929148338527
@@ -75,7 +75,7 @@ const DIGEST_SIZE: usize = 256;
 /// Paillier crate generates primes with both MSB and LSB set to 1,
 /// hence lower bound of the product of primes  is $` (2^{(prime\_size-1)} + 1)^2 `$ ,  where small terms can be ignored
 /// so that resulting bit size is in $`[( 2 * prime\_size -1 ).. (2 * prime\_size) ] `$
-const N_MIN_SIZE: usize = 2 * PRIME_BIT_LENGTH_IN_PAILLIER_SCHEMA - 1;
+pub(crate) const N_MIN_SIZE: usize = 2 * PRIME_BIT_LENGTH_IN_PAILLIER_SCHEMA - 1;
 
 /// generates the vector of $` \rho_{i} `$ of size M2
 ///
@@ -131,9 +131,12 @@ pub fn verify(encryption: &EncryptionKey, sigmas: &[BigInt]) -> Result<(), NIZKE
     if !rho_correct {
         return Err(NIZKError::IncorrectRho);
     }
+    check_divisibility(&n)
+}
+
+pub fn check_divisibility(n: &BigInt) -> Result<(), NIZKError> {
     let alpha_primorial = str::parse::<BigInt>(&PRIMORIAL).unwrap();
     let gcd_test = alpha_primorial.gcd(&n);
-
     if gcd_test == BigInt::one() {
         Ok(())
     } else {
