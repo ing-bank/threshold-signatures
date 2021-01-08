@@ -84,17 +84,20 @@ impl<'a, T: StateMachineTraits> StateMachine<'a, T> {
                 None => match self.timeout.as_ref() {
                     Some(timeout_receiver) => crossbeam_channel::select! {
                         recv(self.inqueue) -> result =>
-                            result.map_err(|e| log::error!("state machine: receive error {:?}", e))
+                            result.map_err(|e| log::error!("SM with timeout: receive error {:?}", e))
                             .map(| message| self.process_message(message) ).ok().flatten(),
                         recv(timeout_receiver) -> _ => return Some(self.state.timeout_outcome(self.retained.drain(..).collect()))
                     },
-                    None => self
-                        .inqueue
-                        .recv()
-                        .map_err(|e| log::error!("state machine: receive error {:?}", e))
-                        .map(|message| self.process_message(message))
-                        .ok()
-                        .flatten(),
+                    None => {
+                        match self.inqueue.recv() {
+                            Ok(m) => self.process_message(m),
+                            Err(e) => {
+                                log::error!("SM with no timeout: receive error {:?}", e);
+                                //early exit required to avoid infinite loop after first RecvError
+                                return None;
+                            }
+                        }
+                    }
                 },
             };
             if let Some(transition) = transition {
