@@ -118,7 +118,6 @@ use crate::ecdsa::{
     Parameters,
 };
 use crate::protocol::{Address, PartyIndex};
-use curv::elliptic::curves::secp256_k1::Secp256k1Point;
 use failure::Fail;
 pub use paillier::DecryptionKey;
 use paillier::EncryptionKey;
