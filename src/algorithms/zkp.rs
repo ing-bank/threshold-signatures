@@ -185,6 +185,7 @@ use curv::elliptic::curves::traits::{ECPoint, ECScalar};
 use std::borrow::Borrow;
 use zeroize::Zeroize;
 
+use crate::algorithms::nizk_rsa;
 use crate::algorithms::primes::PairOfSafePrimes;
 use crate::algorithms::sha::HSha512Trunc256;
 use curv::cryptographic_primitives::proofs::sigma_dlog::{DLogProof, ProveDLog};
@@ -209,7 +210,7 @@ pub struct ZkpSetup {
     p: BigInt,
     q: BigInt,
     alpha: BigInt,
-    pub N_tilda: BigInt,
+    pub N_tilde: BigInt,
     pub h1: BigInt,
     pub h2: BigInt,
 }
@@ -221,7 +222,7 @@ impl Zeroize for ZkpSetup {
         self.p.zeroize_bn();
         self.q.zeroize_bn();
         self.alpha.zeroize_bn();
-        self.N_tilda.zeroize_bn();
+        self.N_tilde.zeroize_bn();
         self.h1.zeroize_bn();
         self.h2.zeroize_bn();
     }
@@ -240,11 +241,12 @@ impl Drop for ZkpSetup {
 /// Contains public fields of the setup and Dlog proof of the correctness
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ZkpPublicSetup {
-    pub N_tilda: BigInt,
+    pub N_tilde: BigInt,
     pub h1: BigInt,
     pub h2: BigInt,
     pub dlog_proof: ZkpSetupProof,
     pub inv_dlog_proof: ZkpSetupProof,
+    pub n_tilde_proof: Vec<BigInt>,
 }
 
 /// The non-interactive proof of correctness of zero knowledge range proof setup.
@@ -299,30 +301,36 @@ impl ZkpSetup {
         let bit_length = group_order_bit_length / 2;
 
         // Fujisaki-Okamoto commitment scheme setup
+        let One = &BigInt::one();
         let mut primes = pair_of_safe_primes(bit_length);
-        let N_tilda = primes.p.borrow() * primes.q.borrow();
-        let b0 = sample_generator_of_rsa_group(&primes.p, &primes.q);
-        // the order of the subgroup
-        let mut subgroup_fi = &primes.p_prim * &primes.q_prim;
-        let alpha = BigInt::sample_below(&subgroup_fi);
-        let b1 = b0.powm(alpha.borrow(), &N_tilda);
+        let b0 = loop {
+            let b0 = sample_generator_of_rsa_group(&primes.p, &primes.q);
+            if b0 != *One {
+                break b0;
+            }
+        };
 
-        subgroup_fi.zeroize_bn();
+        let N_tilde = primes.p.borrow() * primes.q.borrow();
+        let mut phi = (primes.p.borrow() - One) * (primes.q.borrow() - One);
+        let alpha = loop {
+            let alpha = BigInt::strict_sample_range(&BigInt::from(1), &(phi.borrow() / 4));
+            if alpha.invert(&phi).is_some() {
+                break alpha;
+            }
+        };
+        phi.zeroize_bn();
+        let b1 = b0.powm(&alpha, &N_tilde);
+
         let result = Self {
             p: primes.p.clone(),
             q: primes.q.clone(),
             alpha,
-            N_tilda,
+            N_tilde,
             h1: b0,
             h2: b1,
         };
         primes.zeroize();
         result
-    }
-
-    #[cfg(test)]
-    pub fn verify(&self) -> bool {
-        self.h2 == self.h1.powm(&self.alpha, &self.N_tilda)
     }
 }
 
@@ -330,31 +338,35 @@ impl ZkpSetup {
 impl ZkpPublicSetup {
     ///  Creates new public setup from private one
     ///
-    ///  Creates new public setup and generates Schnorr's proof of knowledge of discrete logarithm problem
+    ///  Creates new public setup and generates proof of knowledge of $` \alpha , \alpha^{-1} `$
+    /// and proof of $` gcd(\tilde{N}, phi(\tilde{N} ) = 1 `$
     pub fn from_private_zkp_setup(setup: &ZkpSetup) -> Self {
-        let one = &BigInt::one();
-        let two = &BigInt::from(2);
-        let mut subgroup_fi = ((&setup.p - one) / two) * ((&setup.q - one) / two);
-        let inv_alpha = &setup
-            .alpha
-            .invert(&subgroup_fi)
-            .expect("alpha non invertible");
-        subgroup_fi.zeroize_bn();
+        let One = &BigInt::one();
+        let mut phi = (&setup.p - One) * (&setup.q - One);
+        let inv_alpha = &setup.alpha.invert(&phi).expect("alpha must be invertible"); // already checked in the constructor
+        let inv_n_tilde = setup
+            .N_tilde
+            .invert(&phi)
+            .expect("N-tilde must be invertible");
+        let n_tilde_proof = Self::n_proof(&setup.N_tilde, &setup.p, &setup.q, &inv_n_tilde);
+        phi.zeroize_bn();
+
         Self {
-            N_tilda: setup.N_tilda.clone(),
+            N_tilde: setup.N_tilde.clone(),
             h1: setup.h1.clone(),
             h2: setup.h2.clone(),
-            dlog_proof: Self::dlog_proof(&setup.N_tilda, &setup.h1, &setup.h2, &setup.alpha),
-            inv_dlog_proof: Self::dlog_proof(&setup.N_tilda, &setup.h2, &setup.h1, &inv_alpha),
+            dlog_proof: Self::dlog_proof(&setup.N_tilde, &setup.h1, &setup.h2, &setup.alpha),
+            inv_dlog_proof: Self::dlog_proof(&setup.N_tilde, &setup.h2, &setup.h1, &inv_alpha),
+            n_tilde_proof,
         }
     }
 
-    pub fn dlog_proof(N_tilda: &BigInt, h1: &BigInt, h2: &BigInt, dlog: &BigInt) -> ZkpSetupProof {
+    pub fn dlog_proof(N_tilde: &BigInt, h1: &BigInt, h2: &BigInt, dlog: &BigInt) -> ZkpSetupProof {
         let One = &BigInt::one();
 
-        let mut v: BigInt = BigInt::sample_range(One, &(N_tilda - One));
-        let V = h1.powm(&v, &N_tilda);
-        let challenge = HSha512Trunc256::create_hash(&[N_tilda, &V, h1, h2]);
+        let mut v: BigInt = BigInt::sample_range(One, &(N_tilde - One));
+        let V = h1.powm(&v, &N_tilde);
+        let challenge = HSha512Trunc256::create_hash(&[N_tilde, &V, h1, h2]);
 
         let r: BigInt = &v - (dlog * &challenge);
         v.zeroize_bn();
@@ -365,17 +377,26 @@ impl ZkpPublicSetup {
     ///
     /// verifies public setup using classic Schnorr's proof
     pub fn verify(&self) -> Result<(), ZkpSetupVerificationError> {
-        Self::verify_proof(&self.N_tilda, &self.h1, &self.h2, &self.dlog_proof)?;
-        Self::verify_proof(&self.N_tilda, &self.h2, &self.h1, &self.inv_dlog_proof)?;
+        Self::verify_n_proof(&self.N_tilde, &self.n_tilde_proof)?;
+        let One = BigInt::one();
+        if self.h1 == One {
+            return Err(ZkpSetupVerificationError("h1 equals to 1".to_string()));
+        }
+        if self.h2 == One {
+            return Err(ZkpSetupVerificationError("h2 equals to 1".to_string()));
+        }
+        Self::verify_dlog_proof(&self.N_tilde, &self.h1, &self.h2, &self.dlog_proof)?;
+        Self::verify_dlog_proof(&self.N_tilde, &self.h2, &self.h1, &self.inv_dlog_proof)?;
+
         Ok(())
     }
-    pub fn verify_proof(
-        N_tilda: &BigInt,
+    pub fn verify_dlog_proof(
+        N_tilde: &BigInt,
         h1: &BigInt,
         h2: &BigInt,
         proof: &ZkpSetupProof,
     ) -> Result<(), ZkpSetupVerificationError> {
-        let challenge = HSha512Trunc256::create_hash(&[N_tilda, &proof.V, h1, h2]);
+        let challenge = HSha512Trunc256::create_hash(&[N_tilde, &proof.V, h1, h2]);
 
         if challenge != proof.challenge {
             return Err(ZkpSetupVerificationError(
@@ -383,7 +404,7 @@ impl ZkpPublicSetup {
             ));
         }
 
-        let V = h1.powm(&proof.r, N_tilda) * h2.powm(&challenge, N_tilda) % N_tilda;
+        let V = h1.powm(&proof.r, N_tilde) * h2.powm(&challenge, N_tilde) % N_tilde;
 
         if V == proof.V {
             Ok(())
@@ -391,12 +412,60 @@ impl ZkpPublicSetup {
             Err(ZkpSetupVerificationError("Dlog proof failed".to_string()))
         }
     }
+
+    /// generates non-interactive proof of correctness of RSA  modulus
+    pub fn n_proof(N_tilde: &BigInt, p: &BigInt, q: &BigInt, exp: &BigInt) -> Vec<BigInt> {
+        assert_eq!(*N_tilde, p * q.borrow());
+
+        nizk_rsa::get_rho_vec(&N_tilde)
+            .into_iter()
+            .map(|rho| rho.powm_sec(exp, N_tilde))
+            .collect()
+    }
+
+    pub fn verify_n_proof(
+        N_tilde: &BigInt,
+        proof: &[BigInt],
+    ) -> Result<(), ZkpSetupVerificationError> {
+        if proof.len() != nizk_rsa::M2 {
+            return Err(ZkpSetupVerificationError(
+                "wrong length of proof vector".to_string(),
+            ));
+        }
+
+        if N_tilde.bit_length() < nizk_rsa::N_MIN_SIZE {
+            return Err(ZkpSetupVerificationError("modulus too small".to_string()));
+        }
+
+        let zero = BigInt::zero();
+        nizk_rsa::check_divisibility(N_tilde).map_err(|_| {
+            ZkpSetupVerificationError("modulus divisible by a small prime(s)".to_string())
+        })?;
+
+        let x = proof
+            .iter()
+            .zip(nizk_rsa::get_rho_vec(&N_tilde))
+            .try_for_each(|(sigma, rho)| {
+                if sigma <= &zero {
+                    Err(ZkpSetupVerificationError(
+                        "ZKP of modulus' correctness: negative sigma".to_string(),
+                    ))
+                } else if rho != sigma.powm(N_tilde, N_tilde) {
+                    Err(ZkpSetupVerificationError(
+                        "ZKP of modulus' correctness: invalid n-th root".to_string(),
+                    ))
+                } else {
+                    Ok(())
+                }
+            });
+        x
+    }
 }
 
 #[trace(pretty)]
 impl Zeroize for ZkpPublicSetup {
     fn zeroize(&mut self) {
-        self.N_tilda.zeroize_bn();
+        self.N_tilde.zeroize_bn();
         self.h1.zeroize_bn();
         self.h2.zeroize_bn();
     }
@@ -483,8 +552,8 @@ impl AliceZkpInit {
             bob_setup: bob_setup.clone(),
             alpha: BigInt::sample_below(&q.pow(3)),
             beta: BigInt::from_paillier_key(&alice_pk),
-            gamma: BigInt::sample_below(&(q.pow(3) * &bob_setup.N_tilda)),
-            ro: BigInt::sample_below(&(q * &bob_setup.N_tilda)),
+            gamma: BigInt::sample_below(&(q.pow(3) * &bob_setup.N_tilde)),
+            ro: BigInt::sample_below(&(q * &bob_setup.N_tilde)),
         }
     }
     pub fn N(&self) -> &BigInt {
@@ -493,8 +562,8 @@ impl AliceZkpInit {
     pub fn NN(&self) -> &BigInt {
         &self.alice_pk.nn
     }
-    pub fn N_tilda(&self) -> &BigInt {
-        &self.bob_setup.N_tilda
+    pub fn N_tilde(&self) -> &BigInt {
+        &self.bob_setup.N_tilde
     }
     pub fn h1(&self) -> &BigInt {
         &self.bob_setup.h1
@@ -514,13 +583,13 @@ struct AliceZkpRound1 {
 impl AliceZkpRound1 {
     fn from(init: &AliceZkpInit, a: &BigInt) -> Self {
         Self {
-            z: (init.h1().powm(&a, init.N_tilda()) * init.h2().powm(&init.ro, init.N_tilda()))
-                % init.N_tilda(),
+            z: (init.h1().powm(&a, init.N_tilde()) * init.h2().powm(&init.ro, init.N_tilde()))
+                % init.N_tilde(),
             u: ((init.alpha.borrow() * init.N() + 1) * init.beta.powm(init.N(), init.NN()))
                 % init.NN(),
-            w: (init.h1().powm(&init.alpha, init.N_tilda())
-                * init.h2().powm(&init.gamma, init.N_tilda()))
-                % init.N_tilda(),
+            w: (init.h1().powm(&init.alpha, init.N_tilde())
+                * init.h2().powm(&init.gamma, init.N_tilde()))
+                % init.N_tilde(),
         }
     }
 }
@@ -566,7 +635,7 @@ impl AliceProof {
     ) -> bool {
         let N = &alice_ek.n;
         let NN = &alice_ek.nn;
-        let N_tilda = &bob_zkp_setup.N_tilda;
+        let N_tilde = &bob_zkp_setup.N_tilde;
         let Gen = alice_ek.n.borrow() + 1;
 
         let e = HSha512Trunc256::create_hash_with_nonce(
@@ -583,7 +652,7 @@ impl AliceProof {
             return false;
         }
 
-        let z_e_inv = self.z.powm(&self.e.0, N_tilda).invert(N_tilda);
+        let z_e_inv = self.z.powm(&self.e.0, N_tilde).invert(N_tilde);
         if z_e_inv.is_none() {
             // z must be invertible,  yet the check is done here
             log::trace!("no multiplicative inverse for z^e");
@@ -591,10 +660,10 @@ impl AliceProof {
         }
         let z_e_inv = z_e_inv.unwrap();
 
-        let wprim = (bob_zkp_setup.h1.powm(&self.s1, N_tilda)
-            * bob_zkp_setup.h2.powm(&self.s2, N_tilda)
+        let wprim = (bob_zkp_setup.h1.powm(&self.s1, N_tilde)
+            * bob_zkp_setup.h2.powm(&self.s2, N_tilde)
             * z_e_inv)
-            % N_tilda;
+            % N_tilde;
 
         if self.w != wprim {
             log::trace!("proof.w does not hold right value");
@@ -799,10 +868,10 @@ impl BobZkpInit {
             alpha: BigInt::sample_below(&q.pow(3)),
             beta: BigInt::from_paillier_key(&alice_ek),
             gamma: Randomness::sample(&alice_ek).0,
-            ro: BigInt::sample_below(&(q * alice_setup.N_tilda.borrow())),
-            ro_prim: BigInt::sample_below(&(q.pow(3) * alice_setup.N_tilda.borrow())),
-            sigma: BigInt::sample_below(&(q * alice_setup.N_tilda.borrow())),
-            tau: BigInt::sample_below(&(q * alice_setup.N_tilda.borrow())),
+            ro: BigInt::sample_below(&(q * alice_setup.N_tilde.borrow())),
+            ro_prim: BigInt::sample_below(&(q.pow(3) * alice_setup.N_tilde.borrow())),
+            sigma: BigInt::sample_below(&(q * alice_setup.N_tilde.borrow())),
+            tau: BigInt::sample_below(&(q * alice_setup.N_tilde.borrow())),
         }
     }
     fn N(&self) -> &BigInt {
@@ -814,8 +883,8 @@ impl BobZkpInit {
     pub fn NN(&self) -> &BigInt {
         &self.alice_ek.nn
     }
-    pub fn N_tilda(&self) -> &BigInt {
-        &self.alice_setup.N_tilda
+    pub fn N_tilde(&self) -> &BigInt {
+        &self.alice_setup.N_tilde
     }
     pub fn h1(&self) -> &BigInt {
         &self.alice_setup.h1
@@ -841,17 +910,17 @@ impl BobZkpRound1 {
     fn from(init: &BobZkpInit, b: &FE, beta_prim: &BigInt, a_encrypted: &BigInt) -> Self {
         let b_bn = b.to_big_int();
         Self {
-            z: (init.h1().powm(&b_bn, init.N_tilda()) * init.h2().powm(&init.ro, init.N_tilda()))
-                % init.N_tilda(),
-            z_prim: (init.h1().powm(&init.alpha, init.N_tilda())
-                * init.h2().powm(&init.ro_prim, init.N_tilda()))
-                % init.N_tilda(),
-            t: (init.h1().powm(beta_prim, init.N_tilda())
-                * init.h2().powm(&init.sigma, init.N_tilda()))
-                % init.N_tilda(),
-            w: (init.h1().powm(&init.gamma, init.N_tilda())
-                * init.h2().powm(&init.tau, init.N_tilda()))
-                % init.N_tilda(),
+            z: (init.h1().powm(&b_bn, init.N_tilde()) * init.h2().powm(&init.ro, init.N_tilde()))
+                % init.N_tilde(),
+            z_prim: (init.h1().powm(&init.alpha, init.N_tilde())
+                * init.h2().powm(&init.ro_prim, init.N_tilde()))
+                % init.N_tilde(),
+            t: (init.h1().powm(beta_prim, init.N_tilde())
+                * init.h2().powm(&init.sigma, init.N_tilde()))
+                % init.N_tilde(),
+            w: (init.h1().powm(&init.gamma, init.N_tilde())
+                * init.h2().powm(&init.tau, init.N_tilde()))
+                % init.N_tilde(),
             v: (a_encrypted.powm(&init.alpha, init.NN())
                 * (init.gamma.borrow() * init.N() + 1)
                 * init.beta.powm(init.N(), init.NN()))
@@ -940,7 +1009,7 @@ impl BobProof {
     ) -> bool {
         let N = &alice_ek.n;
         let NN = &alice_ek.nn;
-        let N_tilda = &alice_setup.N_tilda;
+        let N_tilde = &alice_setup.N_tilde;
         let h1 = &alice_setup.h1;
         let h2 = &alice_setup.h2;
 
@@ -954,8 +1023,8 @@ impl BobProof {
             return false;
         }
 
-        let lz = (h1.powm(&self.s1, N_tilda) * h2.powm(&self.s2, N_tilda)) % N_tilda;
-        let rz = (self.z.powm(&e.0, N_tilda) * self.z_prim.borrow()) % N_tilda;
+        let lz = (h1.powm(&self.s1, N_tilde) * h2.powm(&self.s2, N_tilde)) % N_tilde;
+        let rz = (self.z.powm(&e.0, N_tilde) * self.z_prim.borrow()) % N_tilde;
         if lz != rz {
             log::trace!("proof.z doesn't hold right value");
             return false;
@@ -968,8 +1037,8 @@ impl BobProof {
             return false;
         }
 
-        let lw = (h1.powm(&self.t1, N_tilda) * h2.powm(&self.t2, N_tilda)) % N_tilda;
-        let rw = (self.t.powm(&e.0, N_tilda) * self.w.borrow()) % N_tilda;
+        let lw = (h1.powm(&self.t1, N_tilde) * h2.powm(&self.t2, N_tilde)) % N_tilde;
+        let rw = (self.t.powm(&e.0, N_tilde) * self.w.borrow()) % N_tilde;
         if lw != rw {
             log::trace!("proof.t.w doesn't hold right value");
             return false;
@@ -1164,16 +1233,17 @@ impl SampleFromMultiplicativeGroup for BigInt {
         Self::from_modulo(ek.n.borrow())
     }
     fn from_zkp_setup(zkp_keys: &ZkpSetup) -> BigInt {
-        Self::from_modulo(zkp_keys.N_tilda.borrow())
+        Self::from_modulo(zkp_keys.N_tilde.borrow())
     }
     fn from_zkp_public_setup(zkp_keys: &ZkpPublicSetup) -> BigInt {
-        Self::from_modulo(zkp_keys.N_tilda.borrow())
+        Self::from_modulo(zkp_keys.N_tilde.borrow())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::algorithms::primes::is_prime;
     use crate::ecdsa::PaillierKeys;
 
     #[test]
@@ -1187,9 +1257,9 @@ mod tests {
         assert_eq!(zq % 2, 0);
         let setup = ZkpSetup::random(zq);
         // primality and bitness is testes in module 'primes'
-        assert_eq!(setup.p.borrow() * setup.q.borrow(), setup.N_tilda);
-        assert_eq!(setup.N_tilda.gcd(&setup.p), setup.p);
-        assert_eq!(setup.N_tilda.gcd(&setup.q), setup.q);
+        assert_eq!(setup.p.borrow() * setup.q.borrow(), setup.N_tilde);
+        assert_eq!(setup.N_tilde.gcd(&setup.p), setup.p);
+        assert_eq!(setup.N_tilde.gcd(&setup.q), setup.q);
     }
 
     #[test]
@@ -1268,12 +1338,25 @@ mod tests {
     fn zkp_setup_proof() {
         let _ = env_logger::builder().is_test(true).try_init();
 
-        let setup = ZkpSetup::random(DEFAULT_GROUP_ORDER_BIT_LENGTH);
-        assert!(setup.verify());
-        let pub_setup = ZkpPublicSetup::from_private_zkp_setup(&setup);
-        if let Err(e) = pub_setup.verify() {
-            log::error!("{}", e);
-            assert!(false);
-        }
+        (0..10).for_each(|_| {
+            let setup = ZkpSetup::random(DEFAULT_GROUP_ORDER_BIT_LENGTH);
+            assert_eq!(setup.N_tilde, setup.p.borrow() * setup.q.borrow());
+            assert!(is_prime(&setup.p, DEFAULT_GROUP_ORDER_BIT_LENGTH / 2));
+            assert!(is_prime(&setup.q, DEFAULT_GROUP_ORDER_BIT_LENGTH / 2));
+
+            let One = &BigInt::one();
+            let phi = (setup.p.borrow() - One) * (setup.q.borrow() - One);
+            assert_eq!(setup.N_tilde.gcd(&phi), *One);
+            assert_ne!(setup.alpha, *One);
+            assert_ne!(setup.h1, *One);
+            assert_eq!(setup.alpha.gcd(&phi), *One);
+            assert_eq!(setup.h2, setup.h1.powm_sec(&setup.alpha, &setup.N_tilde));
+
+            let pub_setup = ZkpPublicSetup::from_private_zkp_setup(&setup);
+            if let Err(e) = pub_setup.verify() {
+                log::error!("{}", e);
+                assert!(false);
+            }
+        });
     }
 }
