@@ -12,13 +12,14 @@ pub struct HSha512Trunc256;
 impl HSha512Trunc256 {
     const MAX_ITERATIONS_IN_REJECTION_SAMPLING: usize = 256;
     const DIGEST_BIT_LENGTH: usize = 256;
+    const NONCE_SIZE_BYTES: usize = 8;
 
     pub fn can_handle_curve_modulo(q: &BigInt) -> bool {
         Self::DIGEST_BIT_LENGTH == q.bit_length()
     }
 
     pub fn create_hash_with_random_nonce(big_ints: &[&BigInt]) -> (BigInt, BigInt) {
-        let mut nonce = [0u8; 8];
+        let mut nonce = [0u8; Self::NONCE_SIZE_BYTES];
         let mut hasher = Sha512Trunc256::new();
         thread_rng().fill(&mut nonce[..]);
 
@@ -31,13 +32,22 @@ impl HSha512Trunc256 {
         }
 
         let result_hex = hasher.result();
-        (BigInt::from(&result_hex[..]), BigInt::from(&nonce[0..8]))
+        (
+            BigInt::from(&result_hex[..]),
+            BigInt::from(&nonce[0..Self::NONCE_SIZE_BYTES]),
+        )
     }
 
     pub fn create_hash_with_nonce(big_ints: &[&BigInt], nonce: &BigInt) -> (BigInt, BigInt) {
         let mut hasher = Sha512Trunc256::new();
 
-        hasher.input(BigInt::to_vec(nonce));
+        let mut input = BigInt::to_vec(nonce);
+        assert!(input.len() <= Self::NONCE_SIZE_BYTES);
+        while input.len() < Self::NONCE_SIZE_BYTES {
+            input.insert(0, 0u8);
+        }
+
+        hasher.input(input);
         for value in big_ints {
             let as_vec = BigInt::to_vec(value);
             let vec_length = u16::try_from(as_vec.len()).expect("BigInt: bit length too big");
@@ -93,5 +103,29 @@ impl Hash for HSha512Trunc256 {
         let result_hex = hasher.result();
         let result = BigInt::from(&result_hex[..]);
         ECScalar::from(&result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FE;
+    use crate::algorithms::sha::HSha512Trunc256;
+    use curv::arithmetic::traits::Samplable;
+    use curv::elliptic::curves::traits::ECScalar;
+    use paillier::BigInt;
+
+    #[test]
+    fn hash_with_random_nonce() {
+        (1..1000).for_each(|_| {
+            let alpha = BigInt::sample_below(&FE::q().pow(3));
+            let beta = BigInt::sample_below(&FE::q().pow(3));
+            let gamma = BigInt::sample_below(&alpha);
+            let input_slice = [&alpha, &beta, &gamma, &alpha, &beta, &gamma];
+            let (hash, nonce) = HSha512Trunc256::create_hash_with_random_nonce(&input_slice);
+            let (hash_prim, nonce_prim) =
+                HSha512Trunc256::create_hash_with_nonce(&input_slice, &nonce);
+            assert_eq!(hash, hash_prim);
+            assert_eq!(nonce, nonce_prim);
+        });
     }
 }
