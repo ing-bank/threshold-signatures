@@ -1285,6 +1285,7 @@ mod tests {
         assert!(proof.verify(&message.c, &public_paillier_key, &bob_setup));
     }
 
+    #[derive(Debug)]
     pub struct AliceOrBob {
         pub paillier_keys: PaillierKeys,
         pub zkp_setup: ZkpSetup,
@@ -1303,35 +1304,82 @@ mod tests {
     fn bob_zkp() {
         let _ = env_logger::builder().is_test(true).try_init();
 
-        let alice = (AliceOrBob::new(), FE::new_random());
-        let alice_public_zkp_setup = &ZkpPublicSetup::from_private_zkp_setup(&alice.0.zkp_setup);
-        let alice_public_key = &alice.0.paillier_keys.ek;
-        let bob = (AliceOrBob::new(), FE::new_random());
-        let bob_public_zkp_setup = &ZkpPublicSetup::from_private_zkp_setup(&bob.0.zkp_setup);
+        (0..5).for_each(|_| {
+            let alice_setup = AliceOrBob::new();
+            let alice_public_zkp_setup =
+                &ZkpPublicSetup::from_private_zkp_setup(&alice_setup.zkp_setup);
+            let alice_public_key = &alice_setup.paillier_keys.ek;
+            let bob_setup = AliceOrBob::new();
+            let bob_public_zkp_setup =
+                &ZkpPublicSetup::from_private_zkp_setup(&bob_setup.zkp_setup);
 
-        // Simulate Alice
-        let msga = MessageA::new(
-            &alice.1,
-            &alice.0.paillier_keys.ek,
-            Some(&bob_public_zkp_setup),
-        );
+            // run MtA protocol with different inputs
+            (0..5).for_each(|_| {
+                // Simulate Alice
+                let a = FE::new_random();
+                let msga = MessageA::new(
+                    &a,
+                    &alice_setup.paillier_keys.ek,
+                    Some(&bob_public_zkp_setup),
+                );
 
-        // Bob  proves
-        let (msgb, _beta) = MessageB::new(
-            &bob.1,
-            alice_public_key,
-            Some(alice_public_zkp_setup),
-            &msga,
-            MTAMode::MtAwc,
-        );
+                let b = FE::new_random();
+                // Bob follows MtA
+                let (msgb, _beta) = MessageB::new(
+                    &b,
+                    alice_public_key,
+                    Some(alice_public_zkp_setup),
+                    &msga,
+                    MTAMode::MtA,
+                );
+                match msgb.proof {
+                    BobProofType::RangeProof(proof) => {
+                        if !proof.verify(&msga.c, &msgb.c, alice_public_key, &alice_setup.zkp_setup)
+                        {
+                            assert!(
+                                false,
+                                format!(
+                                    "BobProof fails: alice={:?},\nbob={:?}",
+                                    alice_setup, bob_setup
+                                )
+                            );
+                        }
+                    }
+                    _ => assert!(false, "unexpected proof format"),
+                }
+                // Bob follows MtAWC
 
-        match msgb.proof {
-            BobProofType::RangeProofExt(proof) => {
-                // Alice verifies
-                assert!(proof.verify(&msga.c, &msgb.c, alice_public_key, &alice.0.zkp_setup));
-            }
-            _ => assert!(false, ""),
-        }
+                let (msgb, beta) = MessageB::new(
+                    &b,
+                    alice_public_key,
+                    Some(alice_public_zkp_setup),
+                    &msga,
+                    MTAMode::MtAwc,
+                );
+
+                match msgb.proof {
+                    BobProofType::RangeProofExt(proof) => {
+                        // Verify MtA protocol
+                        let alice_share = alice_setup.paillier_keys.decrypt(msgb.c.clone());
+                        let alice_share = alice_share.0.into_owned();
+                        let alpha: FE = ECScalar::from(&alice_share);
+                        assert_eq!(a * b, alpha + beta);
+                        // verify range proof
+                        if !proof.verify(&msga.c, &msgb.c, alice_public_key, &alice_setup.zkp_setup)
+                        {
+                            assert!(
+                                false,
+                                format!(
+                                    "BobProofExt fails: alice={:?},\nbob={:?}",
+                                    alice_setup, bob_setup
+                                )
+                            );
+                        }
+                    }
+                    _ => assert!(false, "unexpected proof format"),
+                }
+            });
+        });
     }
 
     #[test]
@@ -1341,6 +1389,8 @@ mod tests {
         (0..10).for_each(|_| {
             let setup = ZkpSetup::random(DEFAULT_GROUP_ORDER_BIT_LENGTH);
             assert_eq!(setup.N_tilde, setup.p.borrow() * setup.q.borrow());
+            assert_eq!(setup.N_tilde.gcd(&setup.p), setup.p);
+            assert_eq!(setup.N_tilde.gcd(&setup.q), setup.q);
             assert!(is_prime(&setup.p, DEFAULT_GROUP_ORDER_BIT_LENGTH / 2));
             assert!(is_prime(&setup.q, DEFAULT_GROUP_ORDER_BIT_LENGTH / 2));
 
@@ -1350,7 +1400,9 @@ mod tests {
             assert_ne!(setup.alpha, *One);
             assert_ne!(setup.h1, *One);
             assert_eq!(setup.alpha.gcd(&phi), *One);
-            assert_eq!(setup.h2, setup.h1.powm_sec(&setup.alpha, &setup.N_tilde));
+            assert_eq!(setup.h2, setup.h1.powm(&setup.alpha, &setup.N_tilde));
+            let inv_alpha = &setup.alpha.invert(&phi).expect("alpha must be invertible");
+            assert_eq!(setup.h2.powm(&inv_alpha, &setup.N_tilde), setup.h1);
 
             let pub_setup = ZkpPublicSetup::from_private_zkp_setup(&setup);
             if let Err(e) = pub_setup.verify() {
