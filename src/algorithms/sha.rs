@@ -11,7 +11,7 @@ pub struct HSha512Trunc256;
 
 impl HSha512Trunc256 {
     const MAX_ITERATIONS_IN_REJECTION_SAMPLING: usize = 256;
-    const DIGEST_BIT_LENGTH: usize = 256;
+    pub const DIGEST_BIT_LENGTH: usize = 256;
     const NONCE_SIZE_BYTES: usize = 8;
 
     pub fn can_handle_curve_modulo(q: &BigInt) -> bool {

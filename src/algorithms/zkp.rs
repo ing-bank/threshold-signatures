@@ -180,11 +180,11 @@ use paillier::{
     RawPlaintext,
 };
 
-use curv::cryptographic_primitives::hashing::traits::Hash;
 use curv::elliptic::curves::traits::{ECPoint, ECScalar};
 use std::borrow::Borrow;
 use zeroize::Zeroize;
 
+use crate::algorithms::dlog_signature::DlogSignature;
 use crate::algorithms::nizk_rsa;
 use crate::algorithms::primes::PairOfSafePrimes;
 use crate::algorithms::sha::HSha512Trunc256;
@@ -244,8 +244,8 @@ pub struct ZkpPublicSetup {
     pub N_tilde: BigInt,
     pub h1: BigInt,
     pub h2: BigInt,
-    pub dlog_proof: ZkpSetupProof,
-    pub inv_dlog_proof: ZkpSetupProof,
+    pub dlog_proof: DlogSignature,
+    pub inv_dlog_proof: DlogSignature,
     pub n_tilde_proof: Vec<BigInt>,
 }
 
@@ -332,10 +332,21 @@ impl ZkpSetup {
         primes.zeroize();
         result
     }
+    #[cfg(test)]
+    pub(crate) fn phi(&self) -> BigInt {
+        let One = &BigInt::one();
+        (self.p.borrow() - One) * (self.q.borrow() - One)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn alpha(&self) -> &BigInt {
+        &self.alpha
+    }
 }
 
 #[trace(pretty, prefix = "ZkpPublicSetup::")]
 impl ZkpPublicSetup {
+    const DLOG_PROOF_SECURITY_PARAMETER: u32 = 128;
     ///  Creates new public setup from private one
     ///
     ///  Creates new public setup and generates proof of knowledge of $` \alpha , \alpha^{-1} `$
@@ -349,30 +360,33 @@ impl ZkpPublicSetup {
             .invert(&phi)
             .expect("N-tilde must be invertible");
         let n_tilde_proof = Self::n_proof(&setup.N_tilde, &setup.p, &setup.q, &inv_n_tilde);
+        let max_secret_length = phi.bit_length() as u32;
         phi.zeroize_bn();
 
         Self {
             N_tilde: setup.N_tilde.clone(),
             h1: setup.h1.clone(),
             h2: setup.h2.clone(),
-            dlog_proof: Self::dlog_proof(&setup.N_tilde, &setup.h1, &setup.h2, &setup.alpha),
-            inv_dlog_proof: Self::dlog_proof(&setup.N_tilde, &setup.h2, &setup.h1, &inv_alpha),
+            dlog_proof: DlogSignature::sign(
+                &setup.N_tilde,
+                &setup.h1,
+                &setup.h2,
+                &setup.alpha,
+                max_secret_length,
+                Self::DLOG_PROOF_SECURITY_PARAMETER,
+            ),
+            inv_dlog_proof: DlogSignature::sign(
+                &setup.N_tilde,
+                &setup.h2,
+                &setup.h1,
+                &inv_alpha,
+                max_secret_length,
+                Self::DLOG_PROOF_SECURITY_PARAMETER,
+            ),
             n_tilde_proof,
         }
     }
 
-    pub fn dlog_proof(N_tilde: &BigInt, h1: &BigInt, h2: &BigInt, dlog: &BigInt) -> ZkpSetupProof {
-        let One = &BigInt::one();
-
-        let mut v: BigInt = BigInt::sample_range(One, &(N_tilde - One));
-        let V = h1.powm(&v, &N_tilde);
-        let challenge = HSha512Trunc256::create_hash(&[N_tilde, &V, h1, h2]);
-
-        let r: BigInt = &v - (dlog * &challenge);
-        v.zeroize_bn();
-
-        ZkpSetupProof { V, challenge, r }
-    }
     /// verifies public setup
     ///
     /// verifies public setup using classic Schnorr's proof
@@ -394,22 +408,12 @@ impl ZkpPublicSetup {
         N_tilde: &BigInt,
         h1: &BigInt,
         h2: &BigInt,
-        proof: &ZkpSetupProof,
+        signature: &DlogSignature,
     ) -> Result<(), ZkpSetupVerificationError> {
-        let challenge = HSha512Trunc256::create_hash(&[N_tilde, &proof.V, h1, h2]);
-
-        if challenge != proof.challenge {
-            return Err(ZkpSetupVerificationError(
-                "dlog proof: challenge does not match".to_string(),
-            ));
-        }
-
-        let V = h1.powm(&proof.r, N_tilde) * h2.powm(&challenge, N_tilde) % N_tilde;
-
-        if V == proof.V {
-            Ok(())
-        } else {
+        if !signature.verify(N_tilde, h1, h2, Self::DLOG_PROOF_SECURITY_PARAMETER) {
             Err(ZkpSetupVerificationError("Dlog proof failed".to_string()))
+        } else {
+            Ok(())
         }
     }
 
