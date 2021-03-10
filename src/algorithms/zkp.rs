@@ -184,7 +184,7 @@ use curv::elliptic::curves::traits::{ECPoint, ECScalar};
 use std::borrow::Borrow;
 use zeroize::Zeroize;
 
-use crate::algorithms::dlog_signature::DlogSignature;
+use crate::algorithms::dlog_proof::DlogProof;
 use crate::algorithms::nizk_rsa;
 use crate::algorithms::primes::PairOfSafePrimes;
 use crate::algorithms::sha::HSha512Trunc256;
@@ -244,8 +244,8 @@ pub struct ZkpPublicSetup {
     pub N_tilde: BigInt,
     pub h1: BigInt,
     pub h2: BigInt,
-    pub dlog_proof: DlogSignature,
-    pub inv_dlog_proof: DlogSignature,
+    pub dlog_proof: DlogProof,
+    pub inv_dlog_proof: DlogProof,
     pub n_tilde_proof: Vec<BigInt>,
 }
 
@@ -367,7 +367,7 @@ impl ZkpPublicSetup {
             N_tilde: setup.N_tilde.clone(),
             h1: setup.h1.clone(),
             h2: setup.h2.clone(),
-            dlog_proof: DlogSignature::sign(
+            dlog_proof: DlogProof::create(
                 &setup.N_tilde,
                 &setup.h1,
                 &setup.h2,
@@ -375,7 +375,7 @@ impl ZkpPublicSetup {
                 max_secret_length,
                 Self::DLOG_PROOF_SECURITY_PARAMETER,
             ),
-            inv_dlog_proof: DlogSignature::sign(
+            inv_dlog_proof: DlogProof::create(
                 &setup.N_tilde,
                 &setup.h2,
                 &setup.h1,
@@ -408,9 +408,9 @@ impl ZkpPublicSetup {
         N_tilde: &BigInt,
         h1: &BigInt,
         h2: &BigInt,
-        signature: &DlogSignature,
+        proof: &DlogProof,
     ) -> Result<(), ZkpSetupVerificationError> {
-        if !signature.verify(N_tilde, h1, h2, Self::DLOG_PROOF_SECURITY_PARAMETER) {
+        if !proof.verify(N_tilde, h1, h2, Self::DLOG_PROOF_SECURITY_PARAMETER) {
             Err(ZkpSetupVerificationError("Dlog proof failed".to_string()))
         } else {
             Ok(())
