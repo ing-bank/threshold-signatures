@@ -20,10 +20,11 @@ pub enum NIZKError {
 use std::ops::Shl;
 
 use crate::algorithms::sha::HSha512Trunc256;
-use crate::ecdsa::{PaillierKeys, PRIME_BIT_LENGTH_IN_PAILLIER_SCHEMA};
+use crate::ecdsa::PRIME_BIT_LENGTH_IN_PAILLIER_SCHEMA;
 use curv::arithmetic::traits::Modulo;
 use curv::cryptographic_primitives::hashing::traits::Hash;
 use paillier::{extract_nroot, BigInt, DecryptionKey, EncryptionKey};
+use std::borrow::Borrow;
 use std::convert::TryFrom;
 
 /// Initializes the PRNG used for random sampling of points in the algorithm
@@ -99,14 +100,13 @@ pub fn get_rho_vec(n: &BigInt) -> Vec<BigInt> {
 }
 
 /// generates non-interactive proof of correctness of public Paillier key
-pub fn gen_proof(mut dk: DecryptionKey) -> Vec<BigInt> {
-    let n = &dk.q * &dk.p;
+pub fn gen_proof(dk: &DecryptionKey) -> Vec<BigInt> {
+    let n = dk.q.borrow() * dk.p.borrow();
 
     let result = get_rho_vec(&n)
         .into_iter()
         .map(|rho| extract_nroot(&dk, &rho))
         .collect();
-    PaillierKeys::zeroize_dk(&mut dk);
     result
 }
 
