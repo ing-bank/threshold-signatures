@@ -6,7 +6,7 @@
 //! The special case where the old party set is equal to the new party set is called "key refresh". In this case every party just updates own shard with new value.
 use crate::protocol::PartyIndex;
 
-use failure::Fail;
+use thiserror::Error;
 
 pub use super::messages::resharing::{InMsg, Message, OutMsg, Phase1Broadcast};
 
@@ -23,49 +23,43 @@ use trace::trace;
 pub struct CorrectKeyProof(Vec<BigInt>);
 
 /// Enumerates errors which can be reported by resharing protocol
-#[derive(Debug, Fail)]
+#[derive(Debug, Error)]
 #[allow(clippy::large_enum_variant)]
 pub enum ResharingError {
-    #[fail(display = "resharing: timeout in {}", phase)]
+    #[error("resharing: timeout in {phase}")]
     Timeout { phase: String },
-    #[fail(display = "resharing: invalid empty message set {}", desc)]
+    #[error("resharing: invalid empty message set {desc}")]
     EmptyMessageSet { desc: String },
-    #[fail(
-        display = "invalid decommitment {}, commitment {}, party {}",
-        decomm, comm, party
-    )]
+    #[error("invalid decommitment {decomm}, commitment {comm}, party {party}")]
     InvalidComm {
         comm: String,
         decomm: String,
         party: PartyIndex,
     },
-    #[fail(display = "public keys of old committee members are not same")]
+    #[error("public keys of old committee members are not same")]
     InconsistentPublicKeys,
-    #[fail(display = "invalid secret sharing {}, party {}", vss, party)]
+    #[error("invalid secret sharing {vss}, party {party}")]
     InvalidVSS { vss: String, party: PartyIndex },
-    #[fail(display = "received point has wrong X coordinate: {}", x_coord)]
+    #[error("received point has wrong X coordinate: {x_coord}")]
     WrongXCoordinate { x_coord: usize },
-    #[fail(display = "unexpected message {:?}, party {}", message_type, party)]
+    #[error("unexpected message {message_type:?}, party {party}")]
     UnknownMessageType {
         message_type: Message,
         party: PartyIndex,
     },
-    #[fail(display = "invalid proof {}, party {}", proof, party)]
+    #[error("invalid proof {proof}, party {party}")]
     InvalidDlogProof { proof: String, party: PartyIndex },
-    #[fail(display = "invalid correct key proof {}, party {}", proof, party)]
+    #[error("invalid correct key proof {proof}, party {party}")]
     InvalidCorrectKeyProof { proof: String, party: PartyIndex },
-    #[fail(display = "missing range proof from {} ", party)]
+    #[error("missing range proof from {party}")]
     RangeProofSetupMissing { party: PartyIndex },
-    #[fail(display = "unexpected range proof from {}, proof {:?} ", party, proof)]
+    #[error("unexpected range proof from {party}, proof {proof:?} ")]
     RangeProofSetupUnexpected { proof: String, party: PartyIndex },
-    #[fail(
-        display = "range proof setup: dlog proof failed , party {}, proof {} ",
-        party, proof
-    )]
+    #[error("range proof setup: dlog proof failed , party {party}, proof {proof} ")]
     RangeProofSetupDlogProofFailed { proof: String, party: PartyIndex },
-    #[fail(display = "protocol setup error: {}", _0)]
+    #[error("protocol setup error: {0}")]
     ProtocolSetupError(String),
-    #[fail(display = "{}", _0)]
+    #[error("{0}")]
     GeneralError(String),
 }
 
@@ -413,9 +407,9 @@ pub mod new_member {
 
     use crate::algorithms::zkp::{ZkpPublicSetup, ZkpSetup};
     use crate::ecdsa::messages::SecretShare;
-    use failure::_core::time::Duration;
     use std::collections::{BTreeSet, HashMap};
     use std::iter::FromIterator;
+    use std::time::Duration;
     use trace::trace;
 
     /// Result of resharing protocol
@@ -1037,11 +1031,11 @@ mod tests {
     use crate::protocol::{Address, InputMessage, PartyIndex};
     use crate::state_machine::sync_channels::StateMachine;
     use crate::Parameters;
+    use anyhow::bail;
     use crossbeam_channel::{Receiver, Sender};
     use curv::cryptographic_primitives::secret_sharing::feldman_vss::VerifiableSS;
     use curv::elliptic::curves::traits::{ECPoint, ECScalar};
     use curv::{BigInt, FE, GE};
-    use failure::bail;
     use std::path::Path;
     use std::{fs, thread};
 
@@ -1057,18 +1051,18 @@ mod tests {
     }
 
     #[test]
-    fn resharing() -> Result<(), failure::Error> {
+    fn resharing() -> anyhow::Result<()> {
         let _ = env_logger::builder().is_test(true).try_init();
         sharing_helper(false)
     }
 
     #[test]
-    fn resharing_with_range_proofs() -> Result<(), failure::Error> {
+    fn resharing_with_range_proofs() -> anyhow::Result<()> {
         let _ = env_logger::builder().is_test(true).try_init();
         sharing_helper(true)
     }
 
-    pub fn sharing_helper(use_range_proofs: bool) -> Result<(), failure::Error> {
+    pub fn sharing_helper(use_range_proofs: bool) -> anyhow::Result<()> {
         let _ = env_logger::builder().is_test(true).try_init();
         let old_params = Parameters {
             share_count: 3,
@@ -1285,7 +1279,7 @@ mod tests {
                                 }) {
                                     Ok(()) => {}
                                     Err(_) => log::warn!(
-                                        "error sending msg to new node {}, msg:  {}",
+                                        "error sending msg to new node {}, msg: {}",
                                         peer,
                                         mm.msg.body
                                     ),
