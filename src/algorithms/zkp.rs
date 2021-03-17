@@ -189,15 +189,15 @@ use crate::algorithms::nizk_rsa;
 use crate::algorithms::primes::PairOfSafePrimes;
 use crate::algorithms::sha::HSha512Trunc256;
 use curv::cryptographic_primitives::proofs::sigma_dlog::{DLogProof, ProveDLog};
-use failure::Fail;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use trace::trace;
 
 pub const DEFAULT_GROUP_ORDER_BIT_LENGTH: usize = 2048;
 pub const DEFAULT_SAFE_PRIME_BIT_LENGTH: usize = DEFAULT_GROUP_ORDER_BIT_LENGTH / 2;
 
-#[derive(Debug, Fail)]
-#[fail(display = "zkp setup verification: {}", _0)]
+#[derive(Debug, Error)]
+#[error("Zkp setup verification error: {0}")]
 pub struct ZkpSetupVerificationError(String);
 
 /// Zero knowledge range proof setup.

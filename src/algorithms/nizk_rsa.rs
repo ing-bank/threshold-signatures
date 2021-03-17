@@ -3,17 +3,17 @@
 //!
 //!  The Paillier cryptosystem requires a modulus $`N`$ to be relatively prime to $`\phi(N)`$, which is proven in ZK by taking $`N`$th roots of several random points.
 
-use failure::Fail;
+use thiserror::Error;
 
-#[derive(Debug, Fail)]
+#[derive(Debug, Error)]
 pub enum NIZKError {
-    #[fail(display = "NIZK proof: wrong size")]
+    #[error("NIZK proof: wrong size")]
     WrongSizeOFProof,
-    #[fail(display = "NIZK proof: incorrect rho")]
+    #[error("NIZK proof: incorrect rho")]
     IncorrectRho,
-    #[fail(display = "NIZK proof: failed")]
+    #[error("NIZK proof: failer")]
     FailedProof,
-    #[fail(display = "NIZK proof: N can be too small: {} ", _0)]
+    #[error("NIZK proof: N can be too small: {0} ")]
     WrongSizeOfN(usize),
 }
 
