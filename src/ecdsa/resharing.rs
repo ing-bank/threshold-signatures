@@ -485,7 +485,7 @@ pub mod new_member {
                 ));
             }
 
-            // check if new committee has duplicates
+            // check if old committee has duplicates
             let old_parties_as_set = BTreeSet::from_iter(old_committee.iter().cloned());
             if old_parties_as_set.len() != old_committee.len() {
                 return Err(ResharingError::ProtocolSetupError(
@@ -1357,7 +1357,6 @@ mod tests {
     }
 
     pub fn reconstruct(secret_shares: &[SecretShare]) -> FE {
-        //assert!(shares.len() >= self.reconstruct_limit());
         let (points, shares): (Vec<FE>, Vec<FE>) = secret_shares
             .iter()
             .map(|(x, y)| {

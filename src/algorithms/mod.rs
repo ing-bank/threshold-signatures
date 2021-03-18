@@ -1,7 +1,7 @@
 //! Zero knowledge range proofs, safe prime generator and SHA512-256 wrapper
 //!
 #![allow(non_snake_case)]
-pub mod dlog_signature;
+pub mod dlog_proof;
 pub mod nizk_rsa;
 pub mod primes;
 pub mod sha;
