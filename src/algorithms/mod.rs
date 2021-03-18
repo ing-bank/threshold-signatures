@@ -20,12 +20,12 @@ pub fn sample_generator_from_cyclic_group(
     order: &BigInt,
     order_factorization: &[&BigInt],
 ) -> BigInt {
-    let One = &BigInt::one();
+    let One = BigInt::one();
     loop {
-        let alpha = BigInt::sample_below(&(modulo - One));
+        let alpha = BigInt::sample_below(modulo);
         if order_factorization
             .iter()
-            .find(|&&x| alpha.powm_sec(&(order / x), modulo.borrow()) == *One)
+            .find(|&&x| alpha.powm_sec(&(order / x), modulo.borrow()) == One)
             .is_none()
         {
             return alpha;
