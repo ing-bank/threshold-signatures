@@ -20,12 +20,12 @@ pub fn sample_generator_from_cyclic_group(
     order: &BigInt,
     order_factorization: &[&BigInt],
 ) -> BigInt {
-    let One = &BigInt::one();
+    let One = BigInt::one();
     loop {
-        let alpha = BigInt::sample_below(&(modulo - One));
+        let alpha = BigInt::sample_below(modulo);
         if order_factorization
             .iter()
-            .find(|&&x| alpha.powm(&(order / x), modulo.borrow()) == *One)
+            .find(|&&x| alpha.powm_sec(&(order / x), modulo.borrow()) == One)
             .is_none()
         {
             return alpha;
@@ -79,7 +79,7 @@ pub fn sample_generator_of_cyclic_subgroup(p: &BigInt, p_prim: &BigInt) -> BigIn
         for _ in 0..MAX_ITERATIONS_IN_REJECTION_SAMPLING {
             let h = BigInt::sample_below(p);
             if h != BigInt::one() {
-                return h.powm(&exp, p);
+                return h.powm_sec(&exp, p);
             }
         }
         unreachable!(

@@ -7,6 +7,7 @@ use hex::FromHexError;
 use serde::de::Visitor;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
+use anyhow::bail;
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::fmt::{Debug, Display};
 
@@ -18,9 +19,9 @@ use std::fmt::{Debug, Display};
 pub struct PartyIndex(pub [u8; 32]);
 
 impl PartyIndex {
-    pub fn from_slice(slice: &[u8]) -> Result<Self, failure::Error> {
+    pub fn from_slice(slice: &[u8]) -> anyhow::Result<Self> {
         if slice.len() != 32 {
-            failure::bail!("Slice is required to be 32 bytes long");
+            bail!("Slice is required to be 32 bytes long");
         }
 
         Ok({
@@ -164,7 +165,7 @@ mod tests {
     use super::PartyIndex;
 
     #[test]
-    fn serde() -> Result<(), failure::Error> {
+    fn serde() -> anyhow::Result<()> {
         let x = PartyIndex::from(65535 as usize);
 
         let y = serde_json::to_string(&x)?;

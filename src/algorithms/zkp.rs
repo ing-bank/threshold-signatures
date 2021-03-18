@@ -189,15 +189,15 @@ use crate::algorithms::nizk_rsa;
 use crate::algorithms::primes::PairOfSafePrimes;
 use crate::algorithms::sha::HSha512Trunc256;
 use curv::cryptographic_primitives::proofs::sigma_dlog::{DLogProof, ProveDLog};
-use failure::Fail;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use trace::trace;
 
 pub const DEFAULT_GROUP_ORDER_BIT_LENGTH: usize = 2048;
 pub const DEFAULT_SAFE_PRIME_BIT_LENGTH: usize = DEFAULT_GROUP_ORDER_BIT_LENGTH / 2;
 
-#[derive(Debug, Fail)]
-#[fail(display = "zkp setup verification: {}", _0)]
+#[derive(Debug, Error)]
+#[error("Zkp setup verification error: {0}")]
 pub struct ZkpSetupVerificationError(String);
 
 /// Zero knowledge range proof setup.
@@ -319,7 +319,7 @@ impl ZkpSetup {
             }
         };
         phi.zeroize_bn();
-        let b1 = b0.powm(&alpha, &N_tilde);
+        let b1 = b0.powm_sec(&alpha, &N_tilde);
 
         let result = Self {
             p: primes.p.clone(),
@@ -454,7 +454,7 @@ impl ZkpPublicSetup {
                     Err(ZkpSetupVerificationError(
                         "ZKP of modulus' correctness: negative sigma".to_string(),
                     ))
-                } else if rho != sigma.powm(N_tilde, N_tilde) {
+                } else if rho != sigma.powm_sec(N_tilde, N_tilde) {
                     Err(ZkpSetupVerificationError(
                         "ZKP of modulus' correctness: invalid n-th root".to_string(),
                     ))
@@ -587,12 +587,13 @@ struct AliceZkpRound1 {
 impl AliceZkpRound1 {
     fn from(init: &AliceZkpInit, a: &BigInt) -> Self {
         Self {
-            z: (init.h1().powm(&a, init.N_tilde()) * init.h2().powm(&init.ro, init.N_tilde()))
+            z: (init.h1().powm_sec(&a, init.N_tilde())
+                * init.h2().powm_sec(&init.ro, init.N_tilde()))
                 % init.N_tilde(),
-            u: ((init.alpha.borrow() * init.N() + 1) * init.beta.powm(init.N(), init.NN()))
+            u: ((init.alpha.borrow() * init.N() + 1) * init.beta.powm_sec(init.N(), init.NN()))
                 % init.NN(),
-            w: (init.h1().powm(&init.alpha, init.N_tilde())
-                * init.h2().powm(&init.gamma, init.N_tilde()))
+            w: (init.h1().powm_sec(&init.alpha, init.N_tilde())
+                * init.h2().powm_sec(&init.gamma, init.N_tilde()))
                 % init.N_tilde(),
         }
     }
@@ -608,7 +609,7 @@ struct AliceZkpRound2 {
 impl AliceZkpRound2 {
     pub fn from(init: &AliceZkpInit, e: &BigInt, a: &BigInt, r: &BigInt) -> Self {
         Self {
-            s: (r.powm(&e, init.N()) * init.beta.borrow()) % init.N(),
+            s: (r.powm_sec(&e, init.N()) * init.beta.borrow()) % init.N(),
             s1: (e * a) + init.alpha.borrow(),
             s2: (e * init.ro.borrow()) + init.gamma.borrow(),
         }
@@ -656,7 +657,7 @@ impl AliceProof {
             return false;
         }
 
-        let z_e_inv = self.z.powm(&self.e.0, N_tilde).invert(N_tilde);
+        let z_e_inv = self.z.powm_sec(&self.e.0, N_tilde).invert(N_tilde);
         if z_e_inv.is_none() {
             // z must be invertible,  yet the check is done here
             log::trace!("no multiplicative inverse for z^e");
@@ -664,8 +665,8 @@ impl AliceProof {
         }
         let z_e_inv = z_e_inv.unwrap();
 
-        let wprim = (bob_zkp_setup.h1.powm(&self.s1, N_tilde)
-            * bob_zkp_setup.h2.powm(&self.s2, N_tilde)
+        let wprim = (bob_zkp_setup.h1.powm_sec(&self.s1, N_tilde)
+            * bob_zkp_setup.h2.powm_sec(&self.s2, N_tilde)
             * z_e_inv)
             % N_tilde;
 
@@ -675,14 +676,14 @@ impl AliceProof {
         }
 
         let gs1 = (self.s1.borrow() * N + 1) % NN;
-        let cipher_e_inv = cipher.powm(&self.e.0, NN).invert(NN);
+        let cipher_e_inv = cipher.powm_sec(&self.e.0, NN).invert(NN);
         if cipher_e_inv.is_none() {
             log::trace!("no multiplicative inverse for a^e");
             return false;
         }
         let cipher_e_inv = cipher_e_inv.unwrap();
 
-        let uprim = (gs1 * self.s.powm(N, NN) * cipher_e_inv) % NN;
+        let uprim = (gs1 * self.s.powm_sec(N, NN) * cipher_e_inv) % NN;
 
         if uprim != self.u {
             log::trace!("proof.u does not hold right value");
@@ -914,20 +915,21 @@ impl BobZkpRound1 {
     fn from(init: &BobZkpInit, b: &FE, beta_prim: &BigInt, a_encrypted: &BigInt) -> Self {
         let b_bn = b.to_big_int();
         Self {
-            z: (init.h1().powm(&b_bn, init.N_tilde()) * init.h2().powm(&init.ro, init.N_tilde()))
+            z: (init.h1().powm_sec(&b_bn, init.N_tilde())
+                * init.h2().powm_sec(&init.ro, init.N_tilde()))
                 % init.N_tilde(),
-            z_prim: (init.h1().powm(&init.alpha, init.N_tilde())
-                * init.h2().powm(&init.ro_prim, init.N_tilde()))
+            z_prim: (init.h1().powm_sec(&init.alpha, init.N_tilde())
+                * init.h2().powm_sec(&init.ro_prim, init.N_tilde()))
                 % init.N_tilde(),
-            t: (init.h1().powm(beta_prim, init.N_tilde())
-                * init.h2().powm(&init.sigma, init.N_tilde()))
+            t: (init.h1().powm_sec(beta_prim, init.N_tilde())
+                * init.h2().powm_sec(&init.sigma, init.N_tilde()))
                 % init.N_tilde(),
-            w: (init.h1().powm(&init.gamma, init.N_tilde())
-                * init.h2().powm(&init.tau, init.N_tilde()))
+            w: (init.h1().powm_sec(&init.gamma, init.N_tilde())
+                * init.h2().powm_sec(&init.tau, init.N_tilde()))
                 % init.N_tilde(),
-            v: (a_encrypted.powm(&init.alpha, init.NN())
+            v: (a_encrypted.powm_sec(&init.alpha, init.NN())
                 * (init.gamma.borrow() * init.N() + 1)
-                * init.beta.powm(init.N(), init.NN()))
+                * init.beta.powm_sec(init.N(), init.NN()))
                 % init.NN(),
         }
     }
@@ -950,7 +952,7 @@ impl BobZkpRound2 {
     fn from(init: &BobZkpInit, e: &BigInt, b: &FE, beta_prim: &BigInt, r: &Randomness) -> Self {
         let b_bn = b.to_big_int();
         Self {
-            s: (r.0.borrow().powm(e, init.N()) * init.beta.borrow()) % init.N(),
+            s: (r.0.borrow().powm_sec(e, init.N()) * init.beta.borrow()) % init.N(),
             s1: (e * b_bn) + init.alpha.borrow(),
             s2: (e * init.ro.borrow()) + init.ro_prim.borrow(),
             t1: (e * beta_prim) + init.gamma.borrow(),
@@ -1027,22 +1029,24 @@ impl BobProof {
             return false;
         }
 
-        let lz = (h1.powm(&self.s1, N_tilde) * h2.powm(&self.s2, N_tilde)) % N_tilde;
-        let rz = (self.z.powm(&e.0, N_tilde) * self.z_prim.borrow()) % N_tilde;
+        let lz = (h1.powm_sec(&self.s1, N_tilde) * h2.powm_sec(&self.s2, N_tilde)) % N_tilde;
+        let rz = (self.z.powm_sec(&e.0, N_tilde) * self.z_prim.borrow()) % N_tilde;
         if lz != rz {
             log::trace!("proof.z doesn't hold right value");
             return false;
         }
 
-        let lc1 = (a_enc.powm(&self.s1, NN) * self.s.powm(N, NN) * (self.t1.borrow() * N + 1)) % NN;
-        let lc2 = (mta_avc_out.powm(&e.0, NN) * self.v.borrow()) % NN;
+        let lc1 =
+            (a_enc.powm_sec(&self.s1, NN) * self.s.powm_sec(N, NN) * (self.t1.borrow() * N + 1))
+                % NN;
+        let lc2 = (mta_avc_out.powm_sec(&e.0, NN) * self.v.borrow()) % NN;
         if lc1 != lc2 {
             log::trace!("proof.c2.v doesn't hold right value");
             return false;
         }
 
-        let lw = (h1.powm(&self.t1, N_tilde) * h2.powm(&self.t2, N_tilde)) % N_tilde;
-        let rw = (self.t.powm(&e.0, N_tilde) * self.w.borrow()) % N_tilde;
+        let lw = (h1.powm_sec(&self.t1, N_tilde) * h2.powm_sec(&self.t2, N_tilde)) % N_tilde;
+        let rw = (self.t.powm_sec(&e.0, N_tilde) * self.w.borrow()) % N_tilde;
         if lw != rw {
             log::trace!("proof.t.w doesn't hold right value");
             return false;
@@ -1404,9 +1408,9 @@ mod tests {
             assert_ne!(setup.alpha, *One);
             assert_ne!(setup.h1, *One);
             assert_eq!(setup.alpha.gcd(&phi), *One);
-            assert_eq!(setup.h2, setup.h1.powm(&setup.alpha, &setup.N_tilde));
+            assert_eq!(setup.h2, setup.h1.powm_sec(&setup.alpha, &setup.N_tilde));
             let inv_alpha = &setup.alpha.invert(&phi).expect("alpha must be invertible");
-            assert_eq!(setup.h2.powm(&inv_alpha, &setup.N_tilde), setup.h1);
+            assert_eq!(setup.h2.powm_sec(&inv_alpha, &setup.N_tilde), setup.h1);
 
             let pub_setup = ZkpPublicSetup::from_private_zkp_setup(&setup);
             if let Err(e) = pub_setup.verify() {

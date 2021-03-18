@@ -90,7 +90,7 @@ pub fn is_prime(n: &BigInt, bitsize: usize) -> bool {
     }
 
     let random = BigInt::sample_range(&(n / 2), n);
-    let result = random.powm(&(n - BigInt::one()), n);
+    let result = random.powm_sec(&(n - BigInt::one()), n);
     if result != BigInt::one() {
         return false;
     }
@@ -127,7 +127,7 @@ pub fn miller_rabin(n: &BigInt, limit: usize) -> bool {
     let (s, r) = rewrite(&n_minus_one);
     for _ in 0..limit {
         let a = BigInt::sample_range(&Two, &(n - Two.borrow()));
-        let mut y = a.powm(&r, n);
+        let mut y = a.powm_sec(&r, n);
 
         // if 'n'' is prime then one of the following two conditions must hold:
         //  b0 % mod n = 1
@@ -139,7 +139,7 @@ pub fn miller_rabin(n: &BigInt, limit: usize) -> bool {
         }
 
         for _ in 1..s {
-            y = y.powm(Two.borrow(), n);
+            y = y.powm_sec(Two.borrow(), n);
             if y == One {
                 return false;
             }
