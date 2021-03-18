@@ -78,8 +78,8 @@ use curv::cryptographic_primitives::proofs::sigma_dlog::{DLogProof, ProveDLog};
 
 use curv::elliptic::curves::traits::{ECPoint, ECScalar};
 use curv::{BigInt, FE, GE};
-use failure::Fail;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -96,63 +96,60 @@ use std::iter::FromIterator;
 use trace::trace;
 
 /// Enumerates error types which can be raised by signing protocol
-#[derive(Debug, Fail)]
+#[derive(Debug, Error)]
 #[allow(clippy::large_enum_variant)]
 pub enum SigningError {
-    #[fail(display = "signing: timeout in {}", phase)]
+    #[error("signing: timeout in {phase}")]
     Timeout { phase: String },
-    #[fail(display = "unexpected message {:?}, party {}", message_type, party)]
+    #[error("unexpected message {message_type:?}, party {party}")]
     UnexpectedMessageType {
         message_type: Message,
         party: PartyIndex,
     },
-    #[fail(
-        display = "Range proof from Alice, her setup or key not found, party {:?}, proof {:?}, key {:?} ",
-        party, proof, key
-    )]
+    #[error("Range proof from Alice, her setup or key not found, party {party:?}, proof {proof:?}, key {key:?}")]
     AliceRangeProofIncomplete {
         party: PartyIndex,
         proof: Option<AliceProof>,
         key: Option<EncryptionKey>,
     },
-    #[fail(display = "Alice proof failed {:?}, party {:?} ", proof, party)]
+    #[error("Alice proof failed {proof:?}, party {party:?}")]
     AliceProofFailed {
         party: PartyIndex,
         proof: AliceProof,
     },
-    #[fail(display = "Bob proof failed {:?}, party {:?} ", proof, party)]
+    #[error("Bob proof failed {proof:?}, party {party:?}")]
     BobProofFailed {
         party: PartyIndex,
         proof: BobProofType,
     },
 
-    #[fail(display = "Local zkp setup not found, party {:?} ", party)]
+    #[error("Local zkp setup not found, party {party:?}")]
     LocalZkpSetupNotFound { party: PartyIndex },
 
-    #[fail(display = "missing p1 commitment from party {}", _0)]
+    #[error("missing p1 commitment from party {0}")]
     MissingPhase1Commitment(PartyIndex),
 
-    #[fail(display = "Dlog proof failed party {:?} proofs {:?}", party, proof)]
+    #[error("Dlog proof failed party {party:?} proofs {proof:?}")]
     DlogProofFailed { party: PartyIndex, proof: DLogProof },
-    #[fail(display = "invalid decommitment at phase 4 , party {:?}", party)]
+    #[error("invalid decommitment at phase 4 , party {party:?}")]
     InvalidDecommitment { party: PartyIndex },
-    #[fail(display = "invalid ElGamal proof at phase 5b , party {:?}", party)]
+    #[error("invalid ElGamal proof at phase 5b , party {party:?}")]
     InvalidElGamalProof { party: PartyIndex },
-    #[fail(display = "phase5 validation failed")]
+    #[error("phase5 validation failed")]
     Phase5ValidationFailed,
-    #[fail(display = "signature verification failed")]
+    #[error("signature verification failed")]
     SignatureVerificationFailed,
-    #[fail(display = "protocol setup error: {}", _0)]
+    #[error("protocol setup error: {0}")]
     ProtocolSetupError(String),
-    #[fail(display = "invalid public key {}", point)]
+    #[error("invalid public key {point}")]
     InvalidPublicKey { point: String },
-    #[fail(display = "{}", _0)]
+    #[error("{0}")]
     GeneralError(String),
 }
 
-#[derive(Debug, Fail)]
+#[derive(Debug, Error)]
 pub enum ECDSAError {
-    #[fail(display = "{}", desc)]
+    #[error("{desc}")]
     VerificationFailed { desc: String },
 }
 
@@ -1724,10 +1721,10 @@ mod tests {
     use crate::ecdsa::keygen::MultiPartyInfo;
     use crate::protocol::{Address, InputMessage, PartyIndex};
     use crate::state_machine::sync_channels::StateMachine;
+    use anyhow::bail;
     use crossbeam_channel::{Receiver, Sender};
     use curv::elliptic::curves::traits::ECScalar;
     use curv::BigInt;
-    use failure::{bail, Error};
     use sha2::{Digest, Sha256};
     use std::path::Path;
     use std::{fs, thread};
@@ -1744,18 +1741,18 @@ mod tests {
     }
 
     #[test]
-    fn signing() -> Result<(), Error> {
+    fn signing() -> anyhow::Result<()> {
         let _ = env_logger::builder().is_test(true).try_init();
         signing_helper(false)
     }
 
     #[test]
-    fn signing_with_range_proofs() -> Result<(), Error> {
+    fn signing_with_range_proofs() -> anyhow::Result<()> {
         let _ = env_logger::builder().is_test(true).try_init();
         signing_helper(true)
     }
 
-    fn signing_helper(enable_range_proofs: bool) -> Result<(), Error> {
+    fn signing_helper(enable_range_proofs: bool) -> anyhow::Result<()> {
         let mut nodes = Vec::new();
         let mut handles = Vec::new();
 

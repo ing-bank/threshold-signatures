@@ -8,7 +8,7 @@ use std::borrow::Borrow;
 
 pub const DIGEST_BIT_LENGTH: u32 = HSha512Trunc256::DIGEST_BIT_LENGTH as u32;
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DlogSignature {
+pub struct DlogProof {
     security_param: u32,
     y: BigInt,
     c: BigInt,
@@ -18,8 +18,8 @@ pub struct DlogSignature {
 ///
 /// "Composite discrete logarithm and secure authentication" , D. Pointcheval , pp 3.2
 #[allow(clippy::many_single_char_names)]
-impl DlogSignature {
-    pub fn sign(
+impl DlogProof {
+    pub fn create(
         N: &BigInt,
         g: &BigInt,
         V: &BigInt,
@@ -28,9 +28,9 @@ impl DlogSignature {
         security_param: u32,
     ) -> Self {
         let log_r = max_secret_length + DIGEST_BIT_LENGTH + security_param;
-        let R = BigInt::from(2).pow(log_r) - BigInt::one();
+        let R = BigInt::from(2).pow(log_r);
         let mut r = BigInt::sample_below(&R);
-        let x = g.powm(&r, N);
+        let x = g.powm_sec(&r, N);
         let c = HSha512Trunc256::create_hash(&[N, g, V, &x]);
 
         let y = r.borrow() - c.borrow() * s;
@@ -43,7 +43,7 @@ impl DlogSignature {
     }
 
     pub fn verify(&self, N: &BigInt, g: &BigInt, V: &BigInt, security_param: u32) -> bool {
-        let x = g.powm(&self.y, N) * V.powm(&self.c, N) % N;
+        let x = g.powm_sec(&self.y, N) * V.powm_sec(&self.c, N) % N;
         let c = HSha512Trunc256::create_hash(&[N, g, V, &x]);
 
         c == self.c && self.security_param == security_param
@@ -52,7 +52,7 @@ impl DlogSignature {
 
 #[cfg(test)]
 mod tests {
-    use crate::algorithms::dlog_signature::{DlogSignature, DIGEST_BIT_LENGTH};
+    use crate::algorithms::dlog_proof::{DlogProof, DIGEST_BIT_LENGTH};
     use crate::algorithms::zkp::{ZkpSetup, DEFAULT_GROUP_ORDER_BIT_LENGTH};
 
     #[test]
@@ -62,7 +62,7 @@ mod tests {
         let security_param = 64u32;
         let max_secret_length = setup.phi().bit_length() as u32;
 
-        let signature = DlogSignature::sign(
+        let proof = DlogProof::create(
             &setup.N_tilde,
             &setup.h1,
             &setup.h2,
@@ -72,11 +72,11 @@ mod tests {
         );
 
         assert!(
-            signature.y.bit_length()
+            proof.y.bit_length()
                 <= (max_secret_length + security_param + DIGEST_BIT_LENGTH) as usize
         );
-        assert!(signature.c.bit_length() <= DIGEST_BIT_LENGTH as usize);
-        assert_eq!(signature.security_param, security_param);
+        assert!(proof.c.bit_length() <= DIGEST_BIT_LENGTH as usize);
+        assert_eq!(proof.security_param, security_param);
     }
     #[test]
     fn validate() {
@@ -86,7 +86,7 @@ mod tests {
             let security_param = 64u32;
             let max_secret_length = setup.phi().bit_length() as u32;
 
-            let signature = DlogSignature::sign(
+            let proof = DlogProof::create(
                 &setup.N_tilde,
                 &setup.h1,
                 &setup.h2,
@@ -94,7 +94,7 @@ mod tests {
                 max_secret_length,
                 security_param,
             );
-            assert!(signature.verify(&setup.N_tilde, &setup.h1, &setup.h2, security_param))
+            assert!(proof.verify(&setup.N_tilde, &setup.h1, &setup.h2, security_param))
         });
     }
 }
