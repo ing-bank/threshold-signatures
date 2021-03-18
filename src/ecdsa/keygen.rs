@@ -118,9 +118,9 @@ use crate::ecdsa::{
     Parameters,
 };
 use crate::protocol::{Address, PartyIndex};
-use failure::Fail;
 pub use paillier::DecryptionKey;
 use paillier::EncryptionKey;
+use thiserror::Error;
 
 #[doc(inline)]
 pub use super::messages::keygen::{DecommitPublicKey, InMsg, Message, OutMsg, Phase1Broadcast};
@@ -160,59 +160,50 @@ pub type ASecretKeyLoader = Arc<Box<dyn SecretKeyLoader + Send + Sync>>;
 pub struct CorrectKeyProof(pub Vec<BigInt>);
 
 /// Enumerates error type which can be raised by key generation protocol
-#[derive(Debug, Fail)]
+#[derive(Debug, Error)]
 #[allow(clippy::large_enum_variant)]
 pub enum KeygenError {
-    #[fail(display = "Key generation cannot be started: {}", _0)]
+    #[error("Key generation cannot be started: {0}")]
     IncorrectParameters(String),
-    #[fail(display = "keygen: timeout in {}", phase)]
+    #[error("keygen: timeout in {phase}")]
     Timeout { phase: String },
-    #[fail(
-        display = "invalid decommitment {}, commitment {}, party {}",
-        decomm, comm, party
-    )]
+    #[error("invalid decommitment {decomm}, commitment {comm}, party {party}")]
     InvalidComm {
         comm: String,
         decomm: String,
         party: PartyIndex,
     },
-    #[fail(display = "invalid secret sharing {}, party {}", vss, party)]
+    #[error("invalid secret sharing {vss}, party {party}")]
     InvalidVSS { vss: String, party: PartyIndex },
-    #[fail(
-        display = "Number of parties responded ({}) is not same as share count ({}) - 1",
-        parties_responded, share_count
-    )]
+    #[error("Number of parties responded ({parties_responded}) is not same as share count ({share_count}) - 1")]
     NumberOfPartiesMismatch {
         parties_responded: usize,
         share_count: usize,
     },
-    #[fail(display = "multiple points on the polynome encountered {:?}", points)]
+    #[error("multiple points on the polynomial encountered {points:?}")]
     MultiplePointsUsed { points: String },
-    #[fail(display = "received point has wrong X coordinate: {}", x_coord)]
+    #[error("received point has wrong X coordinate: {x_coord}")]
     WrongXCoordinate { x_coord: usize },
-    #[fail(display = "invalid public key {}, party {}", point, party)]
+    #[error("invalid public key {point}, party {party}")]
     InvalidPublicKey { point: String, party: PartyIndex },
-    #[fail(display = "unexpected message {:?}, party {}", message_type, party)]
+    #[error("unexpected message {message_type:?}, party {party}")]
     UnknownMessageType {
         message_type: Message,
         party: PartyIndex,
     },
-    #[fail(display = "invalid dlog proof {}, party {}", proof, party)]
+    #[error("invalid dlog proof {proof}, party {party}")]
     InvalidDlogProof { proof: String, party: PartyIndex },
-    #[fail(display = "invalid correct key proof {}, party {}", proof, party)]
+    #[error("invalid correct key proof {proof}, party {party}")]
     InvalidCorrectKeyProof { proof: String, party: PartyIndex },
-    #[fail(display = "missing range proof from {} ", party)]
+    #[error("missing range proof from {party} ")]
     RangeProofSetupMissing { party: PartyIndex },
-    #[fail(display = "unexpected range proof from {}, proof {:?} ", party, proof)]
+    #[error("unexpected range proof from {party}, proof {proof:?} ")]
     RangeProofSetupUnexpected { proof: String, party: PartyIndex },
-    #[fail(
-        display = "range proof setup: dlog proof failed , party {}, proof {} ",
-        party, proof
-    )]
+    #[error("range proof setup: dlog proof failed , party {party}, proof {proof} ")]
     RangeProofSetupDlogProofFailed { proof: String, party: PartyIndex },
-    #[fail(display = "protocol setup error: {}", _0)]
+    #[error("protocol setup error: {0}")]
     ProtocolSetupError(String),
-    #[fail(display = "{}", _0)]
+    #[error("{0}")]
     GeneralError(String),
 }
 
@@ -450,7 +441,7 @@ impl State<KeyGeneratorTraits> for Phase1 {
                             (Some(_), Some(setup)) => setup.verify().map_or_else(
                                 |e| {
                                     Some(KeygenError::RangeProofSetupDlogProofFailed {
-                                        proof: format!("{} {:?}", e, setup.dlog_proof),
+                                        proof: format!("{:?} {:?}", e, setup.dlog_proof),
                                         party: p,
                                     })
                                 },
@@ -1075,12 +1066,12 @@ mod tests {
     use crate::ecdsa::{InitialKeys, InitialPublicKeys, PaillierKeys, Parameters};
     use crate::protocol::{Address, InputMessage, PartyIndex};
     use crate::state_machine::sync_channels::StateMachine;
+    use anyhow::bail;
     use crossbeam_channel::{Receiver, Sender};
     use curv::cryptographic_primitives::secret_sharing::feldman_vss::VerifiableSS;
     use curv::elliptic::curves::secp256_k1::Secp256k1Scalar;
     use curv::elliptic::curves::traits::{ECPoint, ECScalar};
     use curv::{BigInt, FE, GE};
-    use failure::{bail, Error};
     use paillier::DecryptionKey;
     use std::collections::{HashMap, HashSet};
     use std::fs::File;
@@ -1157,18 +1148,18 @@ mod tests {
     }
 
     #[test]
-    fn keygen() -> Result<(), Error> {
+    fn keygen() -> anyhow::Result<()> {
         let _ = env_logger::builder().is_test(true).try_init();
         keygen_helper(false)
     }
 
     #[test]
-    fn keygen_with_range_proofs() -> Result<(), Error> {
+    fn keygen_with_range_proofs() -> anyhow::Result<()> {
         let _ = env_logger::builder().is_test(true).try_init();
         keygen_helper(true)
     }
 
-    fn keygen_helper(enable_range_proofs: bool) -> Result<(), Error> {
+    fn keygen_helper(enable_range_proofs: bool) -> anyhow::Result<()> {
         let _ = env_logger::builder().is_test(true).try_init();
         let params = Parameters {
             share_count: 3,

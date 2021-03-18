@@ -1,3 +1,4 @@
+use anyhow::{anyhow, bail};
 use crossbeam_channel::{Receiver, Sender};
 use curv::elliptic::curves::secp256_k1::Secp256k1Scalar;
 use ecdsa_mpc::algorithms::zkp::{ZkpSetup, DEFAULT_GROUP_ORDER_BIT_LENGTH};
@@ -10,7 +11,6 @@ use ecdsa_mpc::ecdsa::{InitialKeys, InitialPublicKeys};
 use ecdsa_mpc::protocol::{Address, InputMessage, PartyIndex};
 use ecdsa_mpc::state_machine::sync_channels::StateMachine;
 use ecdsa_mpc::Parameters;
-use failure::{bail, format_err, Error};
 use paillier::DecryptionKey;
 use std::collections::HashMap;
 use std::fs::File;
@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::{env, thread};
 
-fn main() -> Result<(), Error> {
+fn main() -> anyhow::Result<()> {
     let args: Vec<String> = env::args().collect();
     let _ = env_logger::builder().try_init();
 
@@ -46,7 +46,7 @@ fn keygen_helper(
     share_count: usize,
     filename_prefix: &String,
     generate_range_proof_setup: bool,
-) -> Result<(), Error> {
+) -> anyhow::Result<()> {
     let params = Parameters::new(min_signers, share_count)?;
 
     let parties = (0..share_count)
@@ -172,7 +172,7 @@ fn keygen_helper(
             },
             (_, Err(e)) => log::error!("{:?}", e),
         });
-        Err(format_err!("Some state machines returned error"))
+        Err(anyhow!("Some state machines returned error"))
     } else {
         for (index, result) in results.into_iter() {
             // safe to unwrap because results with errors cause the early exit
@@ -195,7 +195,7 @@ struct Node {
 
 struct NodeResult {
     index: usize,
-    join_handle: JoinHandle<Result<FinalState, Error>>,
+    join_handle: JoinHandle<anyhow::Result<FinalState>>,
 }
 
 struct OutputMessageWithSource {

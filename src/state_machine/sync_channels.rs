@@ -280,12 +280,12 @@ mod tests {
             log::info!("machine started");
             thread::sleep(Duration::from_secs(timeout_in_seconds + 2));
             log::info!("sending message");
-            let _ = ingress
+            ingress
                 .send(In {
                     sender: Default::default(),
                     body: MessageType::Init(),
                 })
-                .unwrap();
+                .expect("Cannot send to a state machine in the thread");
         });
 
         let result = machine.execute();

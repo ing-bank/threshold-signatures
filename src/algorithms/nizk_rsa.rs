@@ -3,17 +3,17 @@
 //!
 //!  The Paillier cryptosystem requires a modulus $`N`$ to be relatively prime to $`\phi(N)`$, which is proven in ZK by taking $`N`$th roots of several random points.
 
-use failure::Fail;
+use thiserror::Error;
 
-#[derive(Debug, Fail)]
+#[derive(Debug, Error)]
 pub enum NIZKError {
-    #[fail(display = "NIZK proof: wrong size")]
+    #[error("NIZK proof: wrong size")]
     WrongSizeOFProof,
-    #[fail(display = "NIZK proof: incorrect rho")]
+    #[error("NIZK proof: incorrect rho")]
     IncorrectRho,
-    #[fail(display = "NIZK proof: failed")]
+    #[error("NIZK proof: failer")]
     FailedProof,
-    #[fail(display = "NIZK proof: N can be too small: {} ", _0)]
+    #[error("NIZK proof: N can be too small: {0} ")]
     WrongSizeOfN(usize),
 }
 
@@ -21,7 +21,6 @@ use std::ops::Shl;
 
 use crate::algorithms::sha::HSha512Trunc256;
 use crate::ecdsa::{PaillierKeys, PRIME_BIT_LENGTH_IN_PAILLIER_SCHEMA};
-use curv::arithmetic::traits::Modulo;
 use curv::cryptographic_primitives::hashing::traits::Hash;
 use paillier::{extract_nroot, BigInt, DecryptionKey, EncryptionKey};
 use std::convert::TryFrom;
@@ -30,6 +29,7 @@ use std::convert::TryFrom;
 /// with the sequence of decimal digits found somewhere in Pi:
 ///
 /// 459561513849871375704710178795731042296906667021449863746459528082436944578977
+///
 ///
 ///
 const SALT: &str = "459561513849871375704710178795731042296906667021449863746459528082436944578977";
@@ -127,7 +127,7 @@ pub fn verify(encryption: &EncryptionKey, sigmas: &[BigInt]) -> Result<(), NIZKE
     let rho_correct = sigmas
         .iter()
         .zip(get_rho_vec(n).into_iter())
-        .all(|(sigma, rho)| rho == BigInt::mod_pow(sigma, n, n));
+        .all(|(sigma, rho)| rho == sigma.powm_sec(n, n));
     if !rho_correct {
         return Err(NIZKError::IncorrectRho);
     }
