@@ -30,7 +30,7 @@ impl DlogSignature {
         let R = BigInt::from(2).pow(log_r) - BigInt::one();
         let r = BigInt::sample_below(&R);
         let x = g.powm(&r, N);
-        let c = HSha512Trunc256::create_hash(&[N, g, V, &x]);
+        let c = HSha512Trunc256::create_hash(&[&BigInt::from(security_param), N, g, V, &x]);
 
         let y = r - c.borrow() * s;
         Self {
@@ -42,7 +42,7 @@ impl DlogSignature {
 
     pub fn verify(&self, N: &BigInt, g: &BigInt, V: &BigInt, security_param: u32) -> bool {
         let x = g.powm(&self.y, N) * V.powm(&self.c, N) % N;
-        let c = HSha512Trunc256::create_hash(&[N, g, V, &x]);
+        let c = HSha512Trunc256::create_hash(&[&BigInt::from(security_param), N, g, V, &x]);
 
         c == self.c && self.security_param == security_param
     }
