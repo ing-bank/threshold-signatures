@@ -1267,6 +1267,13 @@ impl State<SigningTraits> for Phase4 {
     }
 }
 
+impl Drop for Phase4 {
+    fn drop(&mut self) {
+        self.k_i = FE::zero();
+        self.gamma_i = FE::zero();
+    }
+}
+
 /// Discriminates the sub phase in Phase 5 protocol
 #[derive(Copy, Clone, PartialEq)]
 enum SubPhaseAB {

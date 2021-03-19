@@ -675,7 +675,7 @@ pub mod new_member {
                 .range_proof_setup
                 .as_ref()
                 .map(|s| ZkpPublicSetup::from_private_zkp_setup(s));
-            let proof = nizk_rsa::gen_proof(self.my_paillier_keys.dk.clone());
+            let proof = nizk_rsa::gen_proof(&self.my_paillier_keys.dk);
             #[allow(clippy::if_not_else)]
             let output = self
                 .previous_phase
