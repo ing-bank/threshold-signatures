@@ -219,13 +219,6 @@ impl PaillierKeys {
         }
     }
 
-    ///erases private key using CPU's memory fence
-    pub fn zeroize_dk(dk: &mut DecryptionKey) {
-        dk.p = BigInt::zero();
-        dk.q = BigInt::zero();
-        atomic::compiler_fence(atomic::Ordering::SeqCst);
-    }
-
     /// produces new Paiiliier key pair    
     pub fn random() -> Self {
         let (ek, dk) =
@@ -262,6 +255,25 @@ impl Display for PaillierKeys {
 impl Debug for PaillierKeys {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.to_string())
+    }
+}
+
+struct ManagedPaillierDecryptionKey(DecryptionKey);
+
+impl Drop for ManagedPaillierDecryptionKey {
+    fn drop(&mut self) {
+        self.0.p = BigInt::zero();
+        self.0.q = BigInt::zero();
+        atomic::compiler_fence(atomic::Ordering::SeqCst);
+    }
+}
+
+struct ManagedSecretKey(FE);
+
+impl Drop for ManagedSecretKey {
+    fn drop(&mut self) {
+        self.0.zeroize();
+        atomic::compiler_fence(atomic::Ordering::SeqCst);
     }
 }
 

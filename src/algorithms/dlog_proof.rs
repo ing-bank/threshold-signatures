@@ -1,5 +1,6 @@
 use crate::algorithms::sha::HSha512Trunc256;
 use curv::arithmetic::traits::Samplable;
+use curv::arithmetic::traits::ZeroizeBN;
 use curv::cryptographic_primitives::hashing::traits::Hash;
 use curv::BigInt;
 use serde::{Deserialize, Serialize};
@@ -28,11 +29,12 @@ impl DlogProof {
     ) -> Self {
         let log_r = max_secret_length + DIGEST_BIT_LENGTH + security_param;
         let R = BigInt::from(2).pow(log_r);
-        let r = BigInt::sample_below(&R);
+        let mut r = BigInt::sample_below(&R);
         let x = g.powm_sec(&r, N);
         let c = HSha512Trunc256::create_hash(&[N, g, V, &x]);
 
-        let y = r - c.borrow() * s;
+        let y = r.borrow() - c.borrow() * s;
+        r.zeroize_bn();
         Self {
             security_param,
             y,

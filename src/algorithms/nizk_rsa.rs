@@ -20,16 +20,16 @@ pub enum NIZKError {
 use std::ops::Shl;
 
 use crate::algorithms::sha::HSha512Trunc256;
-use crate::ecdsa::{PaillierKeys, PRIME_BIT_LENGTH_IN_PAILLIER_SCHEMA};
+use crate::ecdsa::PRIME_BIT_LENGTH_IN_PAILLIER_SCHEMA;
 use curv::cryptographic_primitives::hashing::traits::Hash;
 use paillier::{extract_nroot, BigInt, DecryptionKey, EncryptionKey};
+use std::borrow::Borrow;
 use std::convert::TryFrom;
 
 /// Initializes the PRNG used for random sampling of points in the algorithm
 /// with the sequence of decimal digits found somewhere in Pi:
 ///
 /// 459561513849871375704710178795731042296906667021449863746459528082436944578977
-///
 ///
 ///
 const SALT: &str = "459561513849871375704710178795731042296906667021449863746459528082436944578977";
@@ -99,14 +99,13 @@ pub fn get_rho_vec(n: &BigInt) -> Vec<BigInt> {
 }
 
 /// generates non-interactive proof of correctness of public Paillier key
-pub fn gen_proof(mut dk: DecryptionKey) -> Vec<BigInt> {
-    let n = &dk.q * &dk.p;
+pub fn gen_proof(dk: &DecryptionKey) -> Vec<BigInt> {
+    let n = dk.q.borrow() * dk.p.borrow();
 
     let result = get_rho_vec(&n)
         .into_iter()
         .map(|rho| extract_nroot(&dk, &rho))
         .collect();
-    PaillierKeys::zeroize_dk(&mut dk);
     result
 }
 
@@ -175,7 +174,7 @@ mod tests {
         let (encryption, decryption) =
             Paillier::keypair_with_modulus_size(2 * PRIME_BIT_LENGTH_IN_PAILLIER_SCHEMA).keys();
         for _ in 0..=10 {
-            let proof = gen_proof(decryption.clone());
+            let proof = gen_proof(&decryption);
             verify(&encryption, &proof)?
         }
         Ok(())

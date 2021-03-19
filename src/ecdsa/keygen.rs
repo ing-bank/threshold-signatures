@@ -114,8 +114,8 @@ use crate::ecdsa::messages::{FeldmanVSS, SecretShare};
 
 use crate::algorithms::nizk_rsa;
 use crate::ecdsa::{
-    from_secp256k1_pk, is_valid_curve_point, CommitmentScheme, InitialPublicKeys, PaillierKeys,
-    Parameters,
+    from_secp256k1_pk, is_valid_curve_point, CommitmentScheme, InitialPublicKeys,
+    ManagedPaillierDecryptionKey, ManagedSecretKey, PaillierKeys, Parameters,
 };
 use crate::protocol::{Address, PartyIndex};
 pub use paillier::DecryptionKey;
@@ -350,15 +350,17 @@ impl Phase1 {
         secret_key_loader: ASecretKeyLoader,
         timeout: Option<Duration>,
     ) -> Result<Self, KeygenError> {
-        let dk = secret_key_loader
-            .get_paillier_secret()
-            .map_err(|e| KeygenError::ProtocolSetupError(e.0))?;
-        if !PaillierKeys::is_valid(&init_keys.paillier_encryption_key, &dk) {
+        let dk = ManagedPaillierDecryptionKey(
+            secret_key_loader
+                .get_paillier_secret()
+                .map_err(|e| KeygenError::ProtocolSetupError(e.0))?,
+        );
+        if !PaillierKeys::is_valid(&init_keys.paillier_encryption_key, &dk.0) {
             return Err(KeygenError::ProtocolSetupError(
                 "invalid own Paillier key".to_string(),
             ));
         }
-        let proof = nizk_rsa::gen_proof(dk);
+        let proof = nizk_rsa::gen_proof(&dk.0);
         let scheme = CommitmentScheme::from_GE(&init_keys.y_i);
 
         let acting_parties = BTreeSet::from_iter(parties.iter().cloned());
@@ -641,24 +643,26 @@ impl State<KeyGeneratorTraits> for Phase2 {
             .map(|(party, msg)| (*party, msg.e.clone()))
             .collect::<HashMap<PartyIndex, EncryptionKey>>();
 
-        let sk = self.secret_key_loader.get_initial_secret();
-        if let Err(e) = &sk {
+        let sk_loader_result = self
+            .secret_key_loader
+            .get_initial_secret()
+            .map(|s| ManagedSecretKey(s));
+        if let Err(e) = &sk_loader_result {
             errors.push(KeygenError::GeneralError(e.0.clone()));
         }
 
         if !errors.is_empty() {
-            let error_state = ErrorState::new(errors);
-            log::error!("Phase2 returns {:?}", error_state);
-            return Transition::FinalState(Err(error_state));
+            log::error!("Phase2 returns errors {:?}", errors);
+            return Transition::FinalState(Err(ErrorState::new(errors)));
+            //sk_loader_result is dropped here
         }
 
         let (vss_scheme, outgoing_shares) = {
-            let mut sk = sk.unwrap();
+            let sk = sk_loader_result.unwrap();
             let vss_sharing =
-                VerifiableSS::share(self.params.threshold, self.params.share_count, &sk);
-            sk.zeroize();
+                VerifiableSS::share(self.params.threshold, self.params.share_count, &sk.0);
             vss_sharing
-        };
+        }; // sk is dropped here
 
         let mapped_shares = self.map_parties_to_shares(party_list, outgoing_shares);
         let (parties_points, own_point): (Vec<(_, _)>, Vec<(_, _)>) = mapped_shares
@@ -835,25 +839,23 @@ impl State<KeyGeneratorTraits> for Phase3 {
             Ok(pk) => Some(pk),
         };
 
-        let dk = match self.secret_key_loader.get_paillier_secret() {
-            Ok(dk) if PaillierKeys::is_valid(&self.keys.paillier_encryption_key, &dk) => Some(dk),
-            Err(e) => {
-                errors.push(KeygenError::GeneralError(e.0));
-                None
-            }
-            _ => {
-                errors.push(KeygenError::ProtocolSetupError(
-                    "invalid Paillier key".to_string(),
-                ));
-                None
-            }
-        };
+        let dk_loader_result = self
+            .secret_key_loader
+            .get_paillier_secret()
+            .map(|dk| ManagedPaillierDecryptionKey(dk));
+
+        if let Err(e) = &dk_loader_result {
+            errors.push(KeygenError::GeneralError(e.0.clone()));
+        }
 
         if !errors.is_empty() {
             log::error!("Phase3 returns errors {:?}", errors);
             return Transition::FinalState(Err(ErrorState::new(errors)));
         }
-        let mut dk = dk.expect("invalid paillier decryption key");
+
+        // panic() on dk_loader_result.unwrap() is unreachable as dk_loader_result.is_err() is checked above
+        let dk = dk_loader_result.unwrap();
+        // panic() on public_key.unwrap() is unreachable as try_computing_public_key().is_err() is checked above
         let public_key = from_secp256k1_pk(public_key.unwrap()).expect("invalid full public key");
         let points = self
             .other_points
@@ -871,7 +873,7 @@ impl State<KeyGeneratorTraits> for Phase3 {
                 public_key,
                 own_he_keys: PaillierKeys {
                     ek: self.keys.paillier_encryption_key.clone(),
-                    dk: dk.clone(),
+                    dk: dk.0.clone(),
                 },
                 party_he_keys: self.paillier_keys.clone(),
                 party_to_point_map: Party2PointMap { points },
@@ -879,7 +881,6 @@ impl State<KeyGeneratorTraits> for Phase3 {
             },
             timeout: self.timeout,
         }));
-        PaillierKeys::zeroize_dk(&mut dk);
         new_state
     }
 
