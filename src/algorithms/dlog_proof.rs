@@ -9,7 +9,6 @@ use std::borrow::Borrow;
 pub const DIGEST_BIT_LENGTH: u32 = HSha512Trunc256::DIGEST_BIT_LENGTH as u32;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DlogProof {
-    security_param: u32,
     y: BigInt,
     c: BigInt,
 }
@@ -31,22 +30,18 @@ impl DlogProof {
         let R = BigInt::from(2).pow(log_r);
         let mut r = BigInt::sample_below(&R);
         let x = g.powm_sec(&r, N);
-        let c = HSha512Trunc256::create_hash(&[N, g, V, &x]);
+        let c = HSha512Trunc256::create_hash(&[&BigInt::from(security_param), N, g, V, &x]);
 
         let y = r.borrow() - c.borrow() * s;
         r.zeroize_bn();
-        Self {
-            security_param,
-            y,
-            c,
-        }
+        Self { y, c }
     }
 
     pub fn verify(&self, N: &BigInt, g: &BigInt, V: &BigInt, security_param: u32) -> bool {
         let x = g.powm_sec(&self.y, N) * V.powm_sec(&self.c, N) % N;
-        let c = HSha512Trunc256::create_hash(&[N, g, V, &x]);
+        let c = HSha512Trunc256::create_hash(&[&BigInt::from(security_param), N, g, V, &x]);
 
-        c == self.c && self.security_param == security_param
+        c == self.c
     }
 }
 
@@ -76,7 +71,6 @@ mod tests {
                 <= (max_secret_length + security_param + DIGEST_BIT_LENGTH) as usize
         );
         assert!(proof.c.bit_length() <= DIGEST_BIT_LENGTH as usize);
-        assert_eq!(proof.security_param, security_param);
     }
     #[test]
     fn validate() {
