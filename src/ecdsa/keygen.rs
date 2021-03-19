@@ -847,13 +847,15 @@ impl State<KeyGeneratorTraits> for Phase3 {
         if let Err(e) = &dk_loader_result {
             errors.push(KeygenError::GeneralError(e.0.clone()));
         }
-        let dk = dk_loader_result.unwrap();
 
         if !errors.is_empty() {
             log::error!("Phase3 returns errors {:?}", errors);
             return Transition::FinalState(Err(ErrorState::new(errors)));
         }
 
+        // panic() on dk_loader_result.unwrap() is unreachable as dk_loader_result.is_err() is checked above
+        let dk = dk_loader_result.unwrap();
+        // panic() on public_key.unwrap() is unreachable as try_computing_public_key().is_err() is checked above
         let public_key = from_secp256k1_pk(public_key.unwrap()).expect("invalid full public key");
         let points = self
             .other_points
