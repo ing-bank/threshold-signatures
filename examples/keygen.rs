@@ -230,31 +230,35 @@ impl SecretKeyLoaderImpl {
 }
 
 impl SecretKeyLoader for SecretKeyLoaderImpl {
-    fn get_initial_secret(&self) -> Result<Secp256k1Scalar, SecretKeyLoaderError> {
+    fn get_initial_secret(&self) -> Result<Box<Secp256k1Scalar>, SecretKeyLoaderError> {
         let wallet = self
             .wallet
             .lock()
             .map_err(|e| SecretKeyLoaderError(e.to_string()))?;
 
-        Ok(wallet
-            .records
-            .get(&self.key_index)
-            .ok_or(SecretKeyLoaderError("key not found".to_string()))?
-            .u_i)
+        Ok(Box::new(
+            wallet
+                .records
+                .get(&self.key_index)
+                .ok_or(SecretKeyLoaderError("key not found".to_string()))?
+                .u_i,
+        ))
     }
 
-    fn get_paillier_secret(&self) -> Result<DecryptionKey, SecretKeyLoaderError> {
+    fn get_paillier_secret(&self) -> Result<Box<DecryptionKey>, SecretKeyLoaderError> {
         let wallet = self
             .wallet
             .lock()
             .map_err(|e| SecretKeyLoaderError(e.to_string()))?;
 
-        Ok(wallet
-            .records
-            .get(&self.key_index)
-            .ok_or(SecretKeyLoaderError("key not found".to_string()))?
-            .paillier_keys
-            .dk
-            .clone())
+        Ok(Box::new(
+            wallet
+                .records
+                .get(&self.key_index)
+                .ok_or(SecretKeyLoaderError("key not found".to_string()))?
+                .paillier_keys
+                .dk
+                .clone(),
+        ))
     }
 }
