@@ -137,8 +137,8 @@ use zeroize::Zeroize;
 
 /// Interface for loading secrets , for example, loading pre-determined record from a vault
 pub trait SecretKeyLoader: std::fmt::Debug {
-    fn get_initial_secret(&self) -> Result<FE, SecretKeyLoaderError>;
-    fn get_paillier_secret(&self) -> Result<DecryptionKey, SecretKeyLoaderError>;
+    fn get_initial_secret(&self) -> Result<Box<FE>, SecretKeyLoaderError>;
+    fn get_paillier_secret(&self) -> Result<Box<DecryptionKey>, SecretKeyLoaderError>;
 }
 
 #[derive(Debug)]
@@ -350,17 +350,18 @@ impl Phase1 {
         secret_key_loader: ASecretKeyLoader,
         timeout: Option<Duration>,
     ) -> Result<Self, KeygenError> {
-        let dk = ManagedPaillierDecryptionKey(
-            secret_key_loader
+        let proof = {
+            let dk = secret_key_loader
                 .get_paillier_secret()
-                .map_err(|e| KeygenError::ProtocolSetupError(e.0))?,
-        );
-        if !PaillierKeys::is_valid(&init_keys.paillier_encryption_key, &dk.0) {
-            return Err(KeygenError::ProtocolSetupError(
-                "invalid own Paillier key".to_string(),
-            ));
-        }
-        let proof = nizk_rsa::gen_proof(&dk.0);
+                .map(|dk| ManagedPaillierDecryptionKey(dk))
+                .map_err(|e| KeygenError::ProtocolSetupError(e.0))?;
+            if !PaillierKeys::is_valid(&init_keys.paillier_encryption_key, &dk.0) {
+                return Err(KeygenError::ProtocolSetupError(
+                    "invalid own Paillier key".to_string(),
+                ));
+            }
+            nizk_rsa::gen_proof(&dk.0)
+        };
         let scheme = CommitmentScheme::from_GE(&init_keys.y_i);
 
         let acting_parties = BTreeSet::from_iter(parties.iter().cloned());
@@ -873,7 +874,7 @@ impl State<KeyGeneratorTraits> for Phase3 {
                 public_key,
                 own_he_keys: PaillierKeys {
                     ek: self.keys.paillier_encryption_key.clone(),
-                    dk: dk.0.clone(),
+                    dk: (*dk.0).clone(),
                 },
                 party_he_keys: self.paillier_keys.clone(),
                 party_to_point_map: Party2PointMap { points },
@@ -1119,32 +1120,36 @@ mod tests {
     }
 
     impl SecretKeyLoader for SecretKeyLoaderImpl {
-        fn get_initial_secret(&self) -> Result<Secp256k1Scalar, SecretKeyLoaderError> {
+        fn get_initial_secret(&self) -> Result<Box<Secp256k1Scalar>, SecretKeyLoaderError> {
             let wallet = self
                 .wallet
                 .lock()
                 .map_err(|e| SecretKeyLoaderError(e.to_string()))?;
 
-            Ok(wallet
-                .records
-                .get(&self.key_index)
-                .ok_or(SecretKeyLoaderError("key not found".to_string()))?
-                .u_i)
+            Ok(Box::new(
+                wallet
+                    .records
+                    .get(&self.key_index)
+                    .ok_or(SecretKeyLoaderError("key not found".to_string()))?
+                    .u_i,
+            ))
         }
 
-        fn get_paillier_secret(&self) -> Result<DecryptionKey, SecretKeyLoaderError> {
+        fn get_paillier_secret(&self) -> Result<Box<DecryptionKey>, SecretKeyLoaderError> {
             let wallet = self
                 .wallet
                 .lock()
                 .map_err(|e| SecretKeyLoaderError(e.to_string()))?;
 
-            Ok(wallet
-                .records
-                .get(&self.key_index)
-                .ok_or(SecretKeyLoaderError("key not found".to_string()))?
-                .paillier_keys
-                .dk
-                .clone())
+            Ok(Box::new(
+                wallet
+                    .records
+                    .get(&self.key_index)
+                    .ok_or(SecretKeyLoaderError("key not found".to_string()))?
+                    .paillier_keys
+                    .dk
+                    .clone(),
+            ))
         }
     }
 

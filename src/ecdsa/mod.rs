@@ -258,7 +258,7 @@ impl Debug for PaillierKeys {
     }
 }
 
-struct ManagedPaillierDecryptionKey(DecryptionKey);
+struct ManagedPaillierDecryptionKey(Box<DecryptionKey>);
 
 impl Drop for ManagedPaillierDecryptionKey {
     fn drop(&mut self) {
@@ -268,7 +268,7 @@ impl Drop for ManagedPaillierDecryptionKey {
     }
 }
 
-struct ManagedSecretKey(FE);
+struct ManagedSecretKey(Box<FE>);
 
 impl Drop for ManagedSecretKey {
     fn drop(&mut self) {
