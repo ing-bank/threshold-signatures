@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
 
 pub const DIGEST_BIT_LENGTH: u32 = HSha512Trunc256::DIGEST_BIT_LENGTH as u32;
+pub const ING_TSS_DLOG: &str = "ING TS dlog proof sub-protocol v1.0";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DlogProof {
     y: BigInt,
@@ -30,16 +31,18 @@ impl DlogProof {
         let R = BigInt::from(2).pow(log_r);
         let mut r = BigInt::sample_below(&R);
         let x = g.powm_sec(&r, N);
-        let c = HSha512Trunc256::create_hash(&[&BigInt::from(security_param), N, g, V, &x]);
+        let salt = BigInt::from(ING_TSS_DLOG.as_bytes());
+        let c = HSha512Trunc256::create_hash(&[&salt, N, g, V, &x]);
 
         let y = r.borrow() - c.borrow() * s;
         r.zeroize_bn();
         Self { y, c }
     }
 
-    pub fn verify(&self, N: &BigInt, g: &BigInt, V: &BigInt, security_param: u32) -> bool {
+    pub fn verify(&self, N: &BigInt, g: &BigInt, V: &BigInt) -> bool {
         let x = g.powm_sec(&self.y, N) * V.powm_sec(&self.c, N) % N;
-        let c = HSha512Trunc256::create_hash(&[&BigInt::from(security_param), N, g, V, &x]);
+        let salt = BigInt::from(ING_TSS_DLOG.as_bytes());
+        let c = HSha512Trunc256::create_hash(&[&salt, N, g, V, &x]);
 
         c == self.c
     }
@@ -88,7 +91,7 @@ mod tests {
                 max_secret_length,
                 security_param,
             );
-            assert!(proof.verify(&setup.N_tilde, &setup.h1, &setup.h2, security_param))
+            assert!(proof.verify(&setup.N_tilde, &setup.h1, &setup.h2))
         });
     }
 }
