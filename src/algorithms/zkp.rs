@@ -410,7 +410,7 @@ impl ZkpPublicSetup {
         h2: &BigInt,
         proof: &DlogProof,
     ) -> Result<(), ZkpSetupVerificationError> {
-        if !proof.verify(N_tilde, h1, h2, Self::DLOG_PROOF_SECURITY_PARAMETER) {
+        if !proof.verify(N_tilde, h1, h2) {
             Err(ZkpSetupVerificationError("Dlog proof failed".to_string()))
         } else {
             Ok(())
