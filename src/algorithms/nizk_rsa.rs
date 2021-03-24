@@ -81,7 +81,6 @@ pub(crate) const N_MIN_SIZE: usize = 2 * PRIME_BIT_LENGTH_IN_PAILLIER_SCHEMA - 1
 ///
 /// implements rejection sampling algorithm for $`\rho`$ as described in the [whitepaper](https://eprint.iacr.org/2018/057.pdf) , section C.4
 pub fn get_rho_vec(n: &BigInt) -> Vec<BigInt> {
-    let one = BigInt::one();
     let key_length = n.bit_length();
     let salt = BigInt::from_str_radix(SALT, 10).expect("not a decimal number");
 
@@ -92,7 +91,7 @@ pub fn get_rho_vec(n: &BigInt) -> Vec<BigInt> {
                     let s = hash(&[&n, &salt, &BigInt::from(i), &BigInt::from(j)]);
                     gen_mask(key_length, &s)
                 })
-                .find(|rho| !rho.is_zero() && rho < n && rho.gcd(n) == one)
+                .find(|rho| rho < n)
                 .expect("cant find rho")
         })
         .collect::<Vec<_>>()
