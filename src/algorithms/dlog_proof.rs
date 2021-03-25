@@ -51,13 +51,13 @@ impl DlogProof {
 #[cfg(test)]
 mod tests {
     use crate::algorithms::dlog_proof::{DlogProof, DIGEST_BIT_LENGTH};
-    use crate::algorithms::zkp::{ZkpSetup, DEFAULT_GROUP_ORDER_BIT_LENGTH};
+    use crate::algorithms::zkp::{ZkpPublicSetup, ZkpSetup, DEFAULT_GROUP_ORDER_BIT_LENGTH};
 
     #[test]
     fn check_bitness() {
         let setup = ZkpSetup::random(DEFAULT_GROUP_ORDER_BIT_LENGTH);
 
-        let security_param = 64u32;
+        let security_param = ZkpPublicSetup::DLOG_PROOF_SECURITY_PARAMETER;
         let max_secret_length = setup.phi().bit_length() as u32;
 
         let proof = DlogProof::create(
@@ -80,7 +80,7 @@ mod tests {
         (0..10).for_each(|_| {
             let setup = ZkpSetup::random(DEFAULT_GROUP_ORDER_BIT_LENGTH);
 
-            let security_param = 64u32;
+            let security_param: u32 = ZkpPublicSetup::DLOG_PROOF_SECURITY_PARAMETER;
             let max_secret_length = setup.phi().bit_length() as u32;
 
             let proof = DlogProof::create(

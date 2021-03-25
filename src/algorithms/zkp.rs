@@ -346,7 +346,7 @@ impl ZkpSetup {
 
 #[trace(pretty, prefix = "ZkpPublicSetup::")]
 impl ZkpPublicSetup {
-    const DLOG_PROOF_SECURITY_PARAMETER: u32 = 128;
+    pub const DLOG_PROOF_SECURITY_PARAMETER: u32 = 128;
     ///  Creates new public setup from private one
     ///
     ///  Creates new public setup and generates proof of knowledge of $` \alpha , \alpha^{-1} `$
