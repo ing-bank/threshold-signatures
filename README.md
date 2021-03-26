@@ -9,6 +9,8 @@ and the key resharing with (t+1) parties resulting in a new group of M players h
 
 This README file focuses on sharing detailed technical information about the library. Check our whitepaper [5] for theoretical backgrounds.  
 
+The library has been reviewed by Kudelski Security company, see [The security risk assessment report](/docs/report_ing_tss_1.0.pdf).
+
 ## Motivation
 
 Elliptic curve digital signature algorithm (ECDSA) is used extensively for crypto-currencies such as Bitcoin and  Ethereum to sign transactions.  
