@@ -31,7 +31,8 @@ fn main() {
         let verified = public_setup.verify();
         assert!(
             verified.is_ok(),
-            format!("invalid public zkp setup: {:?}", verified.err())
+            "invalid public zkp setup: {:?}",
+            verified.err()
         );
         result.push(setup);
     }

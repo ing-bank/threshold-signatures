@@ -1346,10 +1346,8 @@ mod tests {
                         {
                             assert!(
                                 false,
-                                format!(
-                                    "BobProof fails: alice={:?},\nbob={:?}",
-                                    alice_setup, bob_setup
-                                )
+                                "BobProof fails: alice={:?},\nbob={:?}",
+                                alice_setup, bob_setup
                             );
                         }
                     }
@@ -1377,10 +1375,8 @@ mod tests {
                         {
                             assert!(
                                 false,
-                                format!(
-                                    "BobProofExt fails: alice={:?},\nbob={:?}",
-                                    alice_setup, bob_setup
-                                )
+                                "BobProofExt fails: alice={:?},\nbob={:?}",
+                                alice_setup, bob_setup
                             );
                         }
                     }
