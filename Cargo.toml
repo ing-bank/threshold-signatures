@@ -23,11 +23,11 @@ serde = { version = "1.0.102", features = ["derive"] }
 hex = "0.4.0"
 log = "0.4.8"
 env_logger = "0.7.1"
-sha2 = "0.8.0"
+sha2 = "0.9"
 sodiumoxide = "0.2.5"
-curv = { package="curv-kzen" , version="0.2.8", features = ["ec_secp256k1", "ecc"] }
+curv = { package="curv-kzen" , version="0.8.0" }
 # the following crate should be pulled from the fork where its dependency on the `curv' library is upgraded
-paillier = { git = "https://github.com/RustMania/rust-paillier" }
+paillier = { package ="kzen-paillier" , tag= "v0.4.1",  git = "https://github.com/KZen-networks/rust-paillier" }
 rand = "0.7.3"
 strum = "0.18.0"
 strum_macros = "0.18.0"
@@ -40,6 +40,11 @@ serde_json = "1.0.42"
 zeroize = { version="1", features = ["zeroize_derive"] }
 thiserror = "1.0.24"
 anyhow = "1.0.38"
+
+#[dependencies.paillier]
+#git = "https://github.com/KZen-networks/rust-paillier"
+#tag = "0.4.1"
+#default-features = false
 
 [package.metadata.docs.rs]
 rustdoc-args = [

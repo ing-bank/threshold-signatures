@@ -105,16 +105,16 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use curv::cryptographic_primitives::proofs::sigma_dlog::DLogProof;
-use curv::cryptographic_primitives::proofs::sigma_dlog::ProveDLog;
+//use curv::cryptographic_primitives::proofs::sigma_dlog::ProveDLog;
 use curv::cryptographic_primitives::secret_sharing::feldman_vss::VerifiableSS;
-use curv::elliptic::curves::traits::{ECPoint, ECScalar};
-use curv::{BigInt, FE, GE};
+use crate::ecdsa::{ECPoint, ECScalar, BigInt, FE, GE, PK, SK, CurvVerifiableSS};
+
 
 use crate::ecdsa::messages::{FeldmanVSS, SecretShare};
 
 use crate::algorithms::nizk_rsa;
 use crate::ecdsa::{
-    from_secp256k1_pk, is_valid_curve_point, CommitmentScheme, InitialPublicKeys,
+    valid_public_key, is_valid_curve_point, CommitmentScheme, InitialPublicKeys,
     ManagedPaillierDecryptionKey, ManagedSecretKey, PaillierKeys, Parameters,
 };
 use crate::protocol::{Address, PartyIndex};
@@ -130,8 +130,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::algorithms::zkp::{ZkpPublicSetup, ZkpSetup, ZkpSetupVerificationError};
 use std::iter::FromIterator;
+use std::ops::Add;
 use std::sync::Arc;
 use std::time::Duration;
+use curv::arithmetic::One;
 use trace::trace;
 use zeroize::Zeroize;
 
@@ -210,10 +212,10 @@ pub enum KeygenError {
 impl super::InitialKeys {
     /// samples from randomness
     pub fn random() -> Self {
-        let u: FE = ECScalar::new_random();
+        let u = FE::random();
 
         #[allow(clippy::op_ref)]
-        let y = &ECPoint::generator() * &u;
+        let y = ECPoint::generator() * &u;
         super::InitialKeys {
             u_i: u,
             y_i: y,
@@ -710,7 +712,7 @@ impl State<KeyGeneratorTraits> for Phase2 {
 /// Uses PublicKey type from underlying secp256k1 library to work around limited API in curv crate
 fn try_computing_public_key(
     pubkey_map: &HashMap<PartyIndex, GE>,
-) -> Result<curv::PK, Vec<KeygenError>> {
+) -> Result<PK, Vec<KeygenError>> {
     if pubkey_map.is_empty() {
         return Err(vec![KeygenError::GeneralError(
             "cant reconstruct public key: input list is empty".to_string(),
@@ -718,9 +720,9 @@ fn try_computing_public_key(
     }
 
     let evec = pubkey_map.iter().fold(Vec::new(), |mut evec, point| {
-        if !is_valid_curve_point(point.1.get_element()) {
+        if !is_valid_curve_point(point.1) {
             evec.push(KeygenError::InvalidPublicKey {
-                point: format!("Party {}, point {:?}", point.0, point.1.get_element()),
+                point: format!("Party {}, point {:?}", point.0, point.1),
                 party: *point.0,
             });
         }
@@ -728,12 +730,12 @@ fn try_computing_public_key(
     });
 
     if evec.is_empty() {
-        let acc: Option<curv::PK> = None;
+        let acc: Option<PK> = None;
         let sum = pubkey_map.iter().fold(acc, |acc, point| match acc {
-            None => Some(point.1.get_element()),
+            None => Some(point.1.clone()),
             Some(v) => Some(
-                v.combine(&point.1.get_element())
-                    .expect("invalid curve point"),
+                v.add(point.1)
+                   // TODO: check is zero... .expect("invalid curve point"),
             ),
         });
         Ok(sum.unwrap())
@@ -752,7 +754,7 @@ struct Phase3 {
     pubkey_map: HashMap<PartyIndex, GE>,
     own_point: SecretShare,
     other_points: HashMap<PartyIndex, SecretShare>,
-    vss_scheme: VerifiableSS,
+    vss_scheme: CurvVerifiableSS,
     secret_key_loader: ASecretKeyLoader,
     range_proof_setups: Option<RangeProofSetups>,
     timeout: Option<Duration>,
@@ -861,7 +863,7 @@ impl State<KeyGeneratorTraits> for Phase3 {
         // panic() on dk_loader_result.unwrap() is unreachable as dk_loader_result.is_err() is checked above
         let dk = dk_loader_result.unwrap();
         // panic() on public_key.unwrap() is unreachable as try_computing_public_key().is_err() is checked above
-        let public_key = from_secp256k1_pk(public_key.unwrap()).expect("invalid full public key");
+        let public_key = valid_public_key(public_key.unwrap()).expect("invalid full public key");
         let points = self
             .other_points
             .iter()

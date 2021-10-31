@@ -1,15 +1,21 @@
 //! Zero knowledge range proofs, safe prime generator and SHA512-256 wrapper
 //!
 #![allow(non_snake_case)]
-pub mod dlog_proof;
+//pub mod dlog_proof;
 pub mod nizk_rsa;
 pub mod primes;
-pub mod sha;
+//pub mod sha;
 pub mod zkp;
 
 use curv::arithmetic::traits::Samplable;
-use curv::BigInt;
 use std::borrow::Borrow;
+use curv::elliptic::curves::ECPoint  as ECPoint;
+use curv::elliptic::curves::ECScalar as ECScalar;
+use curv::arithmetic::BigInt  as BigInt;
+use curv::arithmetic::One;
+
+use curv::cryptographic_primitives::proofs::sigma_dlog::DLogProof;
+type CurvDLogProofType = DLogProof<curv::elliptic::curves::Secp256k1,sha2::Sha256>;
 
 /// Finds a generator of  a cyclic group of order n
 /// using known factorization of n.

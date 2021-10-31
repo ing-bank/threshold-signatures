@@ -21,10 +21,12 @@ use std::ops::Shl;
 
 use crate::algorithms::sha::HSha512Trunc256;
 use crate::ecdsa::PRIME_BIT_LENGTH_IN_PAILLIER_SCHEMA;
-use curv::cryptographic_primitives::hashing::traits::Hash;
+use curv::arithmetic::{BitManipulation, Converter, Zero};
+//use curv::cryptographic_primitives::hashing::traits::Hash;
 use paillier::{extract_nroot, BigInt, DecryptionKey, EncryptionKey};
 use std::borrow::Borrow;
 use std::convert::TryFrom;
+use curv::arithmetic::{Integer, One};
 
 /// Initializes the PRNG used for random sampling of points in the algorithm
 /// with the sequence of decimal digits found somewhere in Pi:

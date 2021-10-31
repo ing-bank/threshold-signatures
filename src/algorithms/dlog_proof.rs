@@ -1,10 +1,12 @@
 use crate::algorithms::sha::HSha512Trunc256;
 use curv::arithmetic::traits::Samplable;
 use curv::arithmetic::traits::ZeroizeBN;
-use curv::cryptographic_primitives::hashing::traits::Hash;
-use curv::BigInt;
+
+use crate::algorithms::BigInt;
+
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
+use curv::arithmetic::{BasicOps, Converter, Integer};
 
 pub const DIGEST_BIT_LENGTH: u32 = HSha512Trunc256::DIGEST_BIT_LENGTH as u32;
 pub const ING_TSS_DLOG: &str = "ING TS dlog proof sub-protocol v1.0";
@@ -30,8 +32,8 @@ impl DlogProof {
         let log_r = max_secret_length + DIGEST_BIT_LENGTH + security_param;
         let R = BigInt::from(2).pow(log_r);
         let mut r = BigInt::sample_below(&R);
-        let x = g.powm_sec(&r, N);
-        let salt = BigInt::from(ING_TSS_DLOG.as_bytes());
+        let x = g.mod_pow(&r, N);
+        let salt = BigInt::from_bytes(ING_TSS_DLOG.as_bytes());
         let c = HSha512Trunc256::create_hash(&[&salt, N, g, V, &x]);
 
         let y = r.borrow() - c.borrow() * s;
@@ -40,8 +42,10 @@ impl DlogProof {
     }
 
     pub fn verify(&self, N: &BigInt, g: &BigInt, V: &BigInt) -> bool {
-        let x = g.powm_sec(&self.y, N) * V.powm_sec(&self.c, N) % N;
-        let salt = BigInt::from(ING_TSS_DLOG.as_bytes());
+
+
+        let x = g.mod_pow(&self.y, N) * V.mod_pow(&self.c, N) % N;
+        let salt = BigInt::from_bytes(ING_TSS_DLOG.as_bytes());
         let c = HSha512Trunc256::create_hash(&[&salt, N, g, V, &x]);
 
         c == self.c

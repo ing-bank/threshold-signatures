@@ -65,19 +65,15 @@ use super::messages::signing::{
     SignBroadcastPhase1, SignDecommitPhase4,
 };
 use super::signature::phase5::LocalSignature;
-use crate::ecdsa::{
-    is_valid_curve_point, CommitmentScheme, MessageHashType, PaillierKeys, SigningParameters,
-};
+use crate::ecdsa::{is_valid_curve_point, CommitmentScheme, MessageHashType, PaillierKeys, SigningParameters, CurvDLogProofType};
 use crate::protocol::{Address, PartyIndex};
 
-use curv::cryptographic_primitives::hashing::hash_sha256::HSha256;
-use curv::cryptographic_primitives::hashing::traits::Hash;
+use sha2::{Digest, Sha256};
+use curv::cryptographic_primitives::hashing::DigestExt;
 use curv::cryptographic_primitives::proofs::sigma_correct_homomorphic_elgamal_enc::HomoElGamalStatement;
 
-use curv::cryptographic_primitives::proofs::sigma_dlog::{DLogProof, ProveDLog};
+use crate::ecdsa::{ECPoint, ECScalar,BigInt, FE, GE};
 
-use curv::elliptic::curves::traits::{ECPoint, ECScalar};
-use curv::{BigInt, FE, GE};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -130,7 +126,7 @@ pub enum SigningError {
     MissingPhase1Commitment(PartyIndex),
 
     #[error("Dlog proof failed party {party:?} proofs {proof:?}")]
-    DlogProofFailed { party: PartyIndex, proof: DLogProof },
+    DlogProofFailed { party: PartyIndex, proof: CurvDLogProofType },
     #[error("invalid decommitment at phase 4 , party {party:?}")]
     InvalidDecommitment { party: PartyIndex },
     #[error("invalid ElGamal proof at phase 5b , party {party:?}")]
@@ -162,10 +158,10 @@ mod mta {
     };
     use crate::algorithms::zkp::BobProofType::{RangeProof, RangeProofExt};
     use crate::algorithms::zkp::{MessageA, ZkpSetup};
-    use crate::ecdsa::PaillierKeys;
-    use curv::cryptographic_primitives::proofs::sigma_dlog::{DLogProof, ProveDLog};
-    use curv::elliptic::curves::traits::{ECPoint, ECScalar};
-    use curv::{FE, GE};
+    use crate::ecdsa::{CurvDLogProofType, PaillierKeys};
+
+    use super::{ECPoint, ECScalar};
+    use super::{FE, GE};
     use std::collections::HashMap;
 
     #[derive(Debug, Clone)]
@@ -230,31 +226,31 @@ mod mta {
 
         let alice_share = Paillier::decrypt(&alice_keys.dk, RawCiphertext::from(mta_output));
         let alice_share = alice_share.0.into_owned();
-        let alpha: FE = ECScalar::from(&alice_share);
+        let alpha = FE::from(&alice_share);
         let mut errors = Vec::new();
         match proof {
             // the simplified proof as defined in GG18, ch.5 , p.19
             BobProofType::DLogProofs(dlog_proofs) => {
-                let g: GE = ECPoint::generator();
+                let g  = GE::generator();
                 let g_alpha = g * alpha;
                 let ba_btag = dlog_proofs.b_proof.pk * a + dlog_proofs.beta_tag_proof.pk;
-                if DLogProof::verify(&dlog_proofs.b_proof).is_err() {
+                if CurvDLogProofType::verify(&dlog_proofs.b_proof).is_err() {
                     errors.push(SigningError::DlogProofFailed {
                         party: *party,
                         proof: dlog_proofs.b_proof.clone(),
                     });
                 }
-                if DLogProof::verify(&dlog_proofs.beta_tag_proof).is_err() {
+                if CurvDLogProofType::verify(&dlog_proofs.beta_tag_proof).is_err() {
                     errors.push(SigningError::DlogProofFailed {
                         party: *party,
                         proof: dlog_proofs.beta_tag_proof.clone(),
                     });
                 }
-                if ba_btag.get_element() != g_alpha.get_element() {
+                if ba_btag != g_alpha {
                     errors.push(SigningError::GeneralError(format!(
                         "DlogProof: eq doesn't hold, g^alpha {:?}, B^a* B_prim {:?} ",
-                        &g_alpha.get_element(),
-                        &ba_btag.get_element()
+                        &g_alpha,
+                        &ba_btag
                     )));
                 }
             }
@@ -288,8 +284,8 @@ mod mta {
 ///The module dedicated to ZKP in the Phase5
 mod phase5 {
     use super::{
-        trace, CommitmentScheme, ECDSAError, ECPoint, ECScalar, HSha256, Hash, MessageHashType, FE,
-        GE,
+        trace, CommitmentScheme, ECDSAError, ECPoint, ECScalar, DigestExt, MessageHashType, FE,
+        GE, Sha256
     };
     use crate::ecdsa::messages::signing::{Phase5Com1, Phase5Com2, Phase5Decom1, Phase5Decom2};
     use crate::ecdsa::signature::ECDSAError::VerificationFailed;
@@ -298,6 +294,7 @@ mod phase5 {
         HomoELGamalProof, HomoElGamalStatement, HomoElGamalWitness,
     };
     use serde::{Deserialize, Serialize};
+    use sha2::Digest;
 
     /// Represents the partial signature used by multiple sub-phases of phase 5 of the protocol
     #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -334,7 +331,7 @@ mod phase5 {
             let l_i_rho_i = self.l_i.mul(&self.rho_i.get_element());
             let V_i = self.R * self.s_i + g * self.l_i;
             let B_i = g * l_i_rho_i;
-            let input_hash = HSha256::create_hash_from_ge(&[&V_i, &A_i, &B_i]).to_big_int();
+            let input_hash = Sha256::new().chain_points(&[&V_i, &A_i, &B_i]).to_big_int();
             let commitment_scheme = CommitmentScheme::from_BigInt(&input_hash);
 
             let witness = HomoElGamalWitness {
@@ -367,7 +364,7 @@ mod phase5 {
         pub fn phase5d_proof(&self, v: GE, a: GE) -> (Phase5Com2, Phase5Decom2) {
             let u_i = v * self.rho_i;
             let t_i = a * self.l_i;
-            let input_hash = HSha256::create_hash_from_ge(&[&u_i, &t_i]).to_big_int();
+            let input_hash = Sha256::new().chain_points(&[&u_i, &t_i]).to_big_int();
             let scheme = CommitmentScheme::from_BigInt(&input_hash);
             (
                 Phase5Com2 { com: scheme.comm },
@@ -1171,7 +1168,7 @@ impl State<SigningTraits> for Phase4 {
             body: Message::R4(SignDecommitPhase4 {
                 blind_factor: self.comm_scheme.decomm.clone(),
                 g_gamma_i,
-                gamma_proof: DLogProof::prove(&self.gamma_i),
+                gamma_proof: CurvDLogProofType::prove(&self.gamma_i),
             }),
         }];
         Some(output)
@@ -1213,7 +1210,7 @@ impl State<SigningTraits> for Phase4 {
                 };
                 if is_valid_curve_point(msg.g_gamma_i.get_element())
                     && foreign_comm_scheme.verify_commitment(msg.g_gamma_i)
-                    && DLogProof::verify(&msg.gamma_proof).is_ok()
+                    && CurvDLogProofType::verify(&msg.gamma_proof).is_ok()
                 // TODO : map 2 possible bad outcomes into 2 errors
                 {
                     None
@@ -1308,7 +1305,7 @@ struct Phase5ab {
 impl Phase5ab {
     fn check_comms_A(&self, party: &PartyIndex, msg: &Phase5Decom1) -> Result<(), SigningError> {
         let comm = self.p5_commitments.get(party).unwrap();
-        let input_hash = HSha256::create_hash_from_ge(&[&msg.V_i, &msg.A_i, &msg.B_i]).to_big_int();
+        let input_hash = Sha256::new().chain_points(&[&msg.V_i, &msg.A_i, &msg.B_i]).to_big_int();
         let scheme = CommitmentScheme {
             comm: comm.clone(),
             decomm: msg.blind_factor.clone(),
@@ -1528,7 +1525,7 @@ struct Phase5cde {
 impl Phase5cde {
     fn check_comms(&self, party: &PartyIndex, msg: &Phase5Decom2) -> Result<(), SigningError> {
         let comm = self.p5_commitments2.get(party).unwrap();
-        let input_hash = HSha256::create_hash_from_ge(&[&msg.U_i, &msg.T_i]).to_big_int();
+        let input_hash = Sha256::new().chain_points(&[&msg.U_i, &msg.T_i]).to_big_int();
         let scheme = CommitmentScheme {
             comm: comm.clone(),
             decomm: msg.blind_factor.clone(),
