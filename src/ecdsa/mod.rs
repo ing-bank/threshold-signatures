@@ -9,11 +9,32 @@
 //!
 use crate::ecdsa::keygen::KeygenError;
 use crate::protocol::PartyIndex;
-use curv::arithmetic::traits::{Samplable, ZeroizeBN};
+use curv::arithmetic::traits::Samplable;
 use curv::cryptographic_primitives::commitments::hash_commitment::HashCommitment;
 use curv::cryptographic_primitives::commitments::traits::Commitment;
-use curv::elliptic::curves::traits::{ECPoint, ECScalar};
-use curv::{BigInt, FE, GE};
+
+use curv::elliptic::curves::{Point, PointFromBytesError, Scalar, Secp256k1};
+type GE = curv::elliptic::curves::Point<Secp256k1>;
+type FE = curv::elliptic::curves::Scalar<Secp256k1>;
+type ECPoint = GE;
+type ECScalar = FE;
+type PK = GE;
+type SK = FE;
+
+use curv::arithmetic::{BigInt, Zero};
+
+
+use curv::cryptographic_primitives::proofs::sigma_dlog::DLogProof;
+type CurvDLogProofType = DLogProof<Secp256k1,sha2::Sha256>;
+
+use curv::cryptographic_primitives::secret_sharing::feldman_vss::VerifiableSS;
+type CurvVerifiableSS = VerifiableSS<Secp256k1>;
+
+use curv::cryptographic_primitives::proofs::sigma_correct_homomorphic_elgamal_enc::HomoELGamalProof;
+type CurvHomoElGamalProof = HomoELGamalProof<Secp256k1,sha2::Sha256>;
+
+
+//, FE, GE};
 use paillier::{
     is_prime, Decrypt, DecryptionKey, EncryptionKey, KeyGeneration, Paillier, RawCiphertext,
     RawPlaintext,
@@ -24,6 +45,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::atomic;
+
 use trace::trace;
 use zeroize::Zeroize;
 
@@ -173,13 +195,12 @@ impl InitialPublicKeys {
     }
 }
 
-fn is_valid_curve_point(pk: curv::PK) -> bool {
-    curv::PK::from_slice(&pk.serialize_uncompressed()).is_ok()
+fn is_valid_curve_point(pk: &GE) -> bool {
+    GE::from_bytes(&pk.to_bytes(false)).is_ok()
 }
 
-fn from_secp256k1_pk(pk: curv::PK) -> Result<GE, curv::ErrorKey> {
-    let bytes = pk.serialize_uncompressed();
-    GE::from_bytes(&bytes[1..])
+fn valid_public_key(pk: PK) -> Result<GE, PointFromBytesError> {
+    GE::from_bytes(&pk.to_bytes(false))
 }
 
 /// Public/private key pair for additive homomorphic encryption schema
@@ -191,10 +212,10 @@ pub struct PaillierKeys {
 
 impl Zeroize for PaillierKeys {
     fn zeroize(&mut self) {
-        self.dk.p.zeroize_bn();
-        self.dk.q.zeroize_bn();
-        self.ek.n.zeroize_bn();
-        self.ek.nn.zeroize_bn();
+        self.dk.p.zeroize();
+        self.dk.q.zeroize();
+        self.ek.n.zeroize();
+        self.ek.nn.zeroize();
     }
 }
 
@@ -305,18 +326,18 @@ impl Signature {
         if self.s == FE::zero() || self.r == FE::zero() {
             false
         } else {
-            let g: GE = ECPoint::generator();
+            let g = GE::generator();
 
-            let s_invert = self.s.invert();
-            let u1 = (*message) * s_invert;
-            let u2 = self.r * s_invert;
+            let s_invert = self.s.invert().unwrap();
+            let u1 = message * &s_invert;
+            let u2 = &self.r * s_invert;
 
             self.r
                 == ECScalar::from(
                     &(g * u1 + pubkey * &u2)
-                        .x_coor()
+                        .x_coord()
                         .unwrap()
-                        .mod_floor(&FE::q()),
+                        .mod_floor(&FE::group_order()),
                 )
         }
     }
@@ -353,7 +374,7 @@ impl CommitmentScheme {
 
     /// verifies commitment using EC group element
     fn verify_commitment(&self, elem: GE) -> bool {
-        is_valid_curve_point(elem.get_element())
+        is_valid_curve_point(&elem)
             && HashCommitment::create_commitment_with_user_defined_randomness(
                 &elem.bytes_compressed_to_big_int(),
                 &self.decomm,

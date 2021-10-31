@@ -11,7 +11,7 @@ use thiserror::Error;
 pub use super::messages::resharing::{InMsg, Message, OutMsg, Phase1Broadcast};
 
 use crate::ecdsa::messages::SecretShare;
-use curv::{BigInt, FE};
+use crate::ecdsa::{BigInt, FE};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
 use std::fmt::Debug;
@@ -152,11 +152,11 @@ pub mod old_member {
     use crate::protocol::{Address, PartyIndex};
     use crate::state_machine::{State, StateMachineTraits, Transition};
     use crate::Parameters;
-    use curv::cryptographic_primitives::hashing::hash_sha256::HSha256;
-    use curv::cryptographic_primitives::hashing::traits::Hash;
+    use sha2::{Digest, Sha256};
+    use curv::cryptographic_primitives::hashing::DigestExt;
     use curv::cryptographic_primitives::secret_sharing::feldman_vss::VerifiableSS;
-    use curv::elliptic::curves::traits::ECScalar;
-    use curv::{BigInt, FE, GE};
+    use crate::ecdsa::{ECPoint, ECScalar, BigInt, FE, GE, CurvVerifiableSS};
+
     use std::cell::RefCell;
     use std::collections::BTreeSet;
     use std::iter::FromIterator;
@@ -190,7 +190,7 @@ pub mod old_member {
     #[derive(Debug)]
     pub struct Phase1 {
         new_committee: BTreeSet<PartyIndex>,
-        vss_scheme: VerifiableSS,
+        vss_scheme: CurvVerifiableSS,
         outgoing_shares: Vec<FE>,
         vss_comm: BigInt,
         y: GE,
@@ -247,7 +247,7 @@ pub mod old_member {
             let (vss_scheme, outgoing_shares) =
                 VerifiableSS::share(new_params.threshold, new_params.share_count, &w_i);
             let vss_refs = vss_scheme.commitments.iter().collect::<Vec<_>>();
-            let vss_comm = HSha256::create_hash_from_ge(&vss_refs).to_big_int();
+            let vss_comm = Sha256::new().chain_points(&vss_refs).to_big_int();
 
             Ok(Phase1 {
                 new_committee: new_parties_as_set,
@@ -316,7 +316,7 @@ pub mod old_member {
     /// * Collect `FinalAck` messages and exits  
     struct Phase2 {
         new_committee: BTreeSet<PartyIndex>,
-        vss_scheme: VerifiableSS,
+        vss_scheme: CurvVerifiableSS,
         outgoing_shares: RefCell<Vec<FE>>,
         timeout: Option<Duration>,
     }
@@ -397,11 +397,11 @@ pub mod new_member {
     use crate::protocol::{Address, PartyIndex};
     use crate::state_machine::{State, StateMachineTraits, Transition};
     use crate::Parameters;
-    use curv::cryptographic_primitives::hashing::hash_sha256::HSha256;
-    use curv::cryptographic_primitives::hashing::traits::Hash;
 
-    use curv::elliptic::curves::traits::{ECPoint, ECScalar};
-    use curv::{BigInt, FE, GE};
+    use sha2::{Digest, Sha256};
+    use curv::cryptographic_primitives::hashing::DigestExt;
+
+    use crate::ecdsa::{ECPoint, ECScalar, BigInt, FE, GE};
 
     use paillier::{EncryptionKey, KeyGeneration, Paillier};
 
@@ -857,7 +857,7 @@ pub mod new_member {
                         .filter_map(|(p, vss)| {
                             let ((_, x_i), vss) = (vss.share, vss.vss);
                             let vss_refs = vss.commitments.iter().collect::<Vec<_>>();
-                            let decomm = HSha256::create_hash_from_ge(&vss_refs).to_big_int();
+                            let decomm = Sha256::new().chain_points(&vss_refs).to_big_int();
                             match self.previous_phase.vss_comms.get(&p) {
                                 Some(comm) => {
                                     if *comm == decomm {

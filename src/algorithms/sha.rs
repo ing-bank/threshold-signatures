@@ -1,11 +1,12 @@
 //! Implements Hash trait for Sha512-256 algorithm
-use curv::arithmetic::traits::Converter;
-use curv::cryptographic_primitives::hashing::traits::Hash;
-use curv::elliptic::curves::traits::{ECPoint, ECScalar};
-use curv::{BigInt, FE, GE};
+//use curv::arithmetic::traits::Converter;
+//use curv::cryptographic_primitives::hashing::traits::Hash;
+use super::{ECPoint, ECScalar,BigInt, FE, GE};
+
 use rand::{thread_rng, Rng};
 use sha2::{Digest, Sha512Trunc256};
 use std::convert::TryFrom;
+use curv::arithmetic::{BasicOps, BitManipulation, Converter};
 
 pub struct HSha512Trunc256;
 
@@ -25,7 +26,7 @@ impl HSha512Trunc256 {
 
         hasher.input(nonce);
         for value in big_ints {
-            let as_vec = BigInt::to_vec(value);
+            let as_vec = BigInt::to_bytes(value);
             let vec_length = u16::try_from(as_vec.len()).expect("BigInt: bit length too big");
             hasher.input(vec_length.to_le_bytes());
             hasher.input(&as_vec);
@@ -33,15 +34,15 @@ impl HSha512Trunc256 {
 
         let result_hex = hasher.result();
         (
-            BigInt::from(&result_hex[..]),
-            BigInt::from(&nonce[0..Self::NONCE_SIZE_BYTES]),
+            BigInt::from_bytes(&result_hex[..]),
+            BigInt::from_bytes(&nonce[0..Self::NONCE_SIZE_BYTES]),
         )
     }
 
     pub fn create_hash_with_nonce(big_ints: &[&BigInt], nonce: &BigInt) -> (BigInt, BigInt) {
         let mut hasher = Sha512Trunc256::new();
 
-        let mut input = BigInt::to_vec(nonce);
+        let mut input = BigInt::to_bytes(nonce);
         assert!(input.len() <= Self::NONCE_SIZE_BYTES);
         while input.len() < Self::NONCE_SIZE_BYTES {
             input.insert(0, 0u8);
@@ -49,7 +50,7 @@ impl HSha512Trunc256 {
 
         hasher.input(input);
         for value in big_ints {
-            let as_vec = BigInt::to_vec(value);
+            let as_vec = BigInt::to_bytes(value);
             let vec_length = u16::try_from(as_vec.len()).expect("BigInt: bit length too big");
             hasher.input(vec_length.to_le_bytes());
             hasher.input(&as_vec);
@@ -75,36 +76,36 @@ impl HSha512Trunc256 {
     }
 }
 
-impl Hash for HSha512Trunc256 {
-    fn create_hash(big_ints: &[&BigInt]) -> BigInt {
-        let mut hasher = Sha512Trunc256::new();
-
-        for value in big_ints {
-            let as_vec = BigInt::to_vec(value);
-            let vec_length = u16::try_from(as_vec.len()).expect("BigInt: bit length too big");
-            hasher.input(vec_length.to_le_bytes());
-            hasher.input(&as_vec);
-        }
-
-        let result_hex = hasher.result();
-        BigInt::from(&result_hex[..])
-    }
-
-    fn create_hash_from_slice(_: &[u8]) -> BigInt {
-        unimplemented!()
-    }
-
-    fn create_hash_from_ge(ge_vec: &[&GE]) -> FE {
-        let mut hasher = Sha512Trunc256::new();
-        for value in ge_vec {
-            hasher.input(&value.pk_to_key_slice());
-        }
-
-        let result_hex = hasher.result();
-        let result = BigInt::from(&result_hex[..]);
-        ECScalar::from(&result)
-    }
-}
+// impl Hash for HSha512Trunc256 {
+//     fn create_hash(big_ints: &[&BigInt]) -> BigInt {
+//         let mut hasher = Sha512Trunc256::new();
+//
+//         for value in big_ints {
+//             let as_vec = BigInt::to_vec(value);
+//             let vec_length = u16::try_from(as_vec.len()).expect("BigInt: bit length too big");
+//             hasher.input(vec_length.to_le_bytes());
+//             hasher.input(&as_vec);
+//         }
+//
+//         let result_hex = hasher.result();
+//         BigInt::from(&result_hex[..])
+//     }
+//
+//     fn create_hash_from_slice(_: &[u8]) -> BigInt {
+//         unimplemented!()
+//     }
+//
+//     fn create_hash_from_ge(ge_vec: &[&GE]) -> FE {
+//         let mut hasher = Sha512Trunc256::new();
+//         for value in ge_vec {
+//             hasher.input(&value.pk_to_key_slice());
+//         }
+//
+//         let result_hex = hasher.result();
+//         let result = BigInt::from(&result_hex[..]);
+//         ECScalar::from(&result)
+//     }
+// }
 
 #[cfg(test)]
 mod tests {

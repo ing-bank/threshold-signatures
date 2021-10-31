@@ -174,21 +174,24 @@
 //!
 #![allow(non_snake_case)]
 use curv::arithmetic::traits::{Samplable, ZeroizeBN};
-use curv::{BigInt, FE, GE};
+//use curv::{BigInt, FE, GE};
 use paillier::{
     Add, EncryptWithChosenRandomness, EncryptionKey, Mul, Paillier, Randomness, RawCiphertext,
     RawPlaintext,
 };
 
-use curv::elliptic::curves::traits::{ECPoint, ECScalar};
+//use curv::elliptic::curves::traits::{ECPoint, ECScalar};
 use std::borrow::Borrow;
+use curv::arithmetic::BigInt;
 use zeroize::Zeroize;
 
 use crate::algorithms::dlog_proof::DlogProof;
-use crate::algorithms::nizk_rsa;
+use crate::algorithms::{CurvDLogProofType, nizk_rsa};
 use crate::algorithms::primes::PairOfSafePrimes;
 use crate::algorithms::sha::HSha512Trunc256;
-use curv::cryptographic_primitives::proofs::sigma_dlog::{DLogProof, ProveDLog};
+use curv::cryptographic_primitives::proofs::sigma_dlog::DLogProof;
+use curv::elliptic::curves::{ECPoint,ECScalar};
+use curv::elliptic::curves::p256::{FE, GE};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use trace::trace;
@@ -728,8 +731,8 @@ impl AliceProof {
 /// simple discrete log proof, used as the alternative to range proof
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DLogProofs {
-    pub b_proof: DLogProof,
-    pub beta_tag_proof: DLogProof,
+    pub b_proof: CurvDLogProofType,
+    pub beta_tag_proof: CurvDLogProofType,
 }
 
 /// enumerates types of proofs Bob can use in the protocol
@@ -782,7 +785,7 @@ impl MessageB {
         //
         let mta_out = Paillier::add(alice_ek, b_times_enc_a, enc_beta_prim);
 
-        let beta_prim_fe: FE = ECScalar::from(&beta_prim);
+        let beta_prim_fe: FE = FE::from(&beta_prim);
         let beta = FE::zero().sub(&beta_prim_fe.get_element());
 
         let proof = match &alice_zkp_setup {
@@ -1146,9 +1149,9 @@ impl BobProofExt {
 
         // fiddle with EC points
         let (x1, x2) = {
-            let ec_gen: GE = ECPoint::generator();
-            let s1: FE = ECScalar::from(&self.proof.s1);
-            let e: FE = ECScalar::from(&self.proof.e.0);
+            let ec_gen: GE = GE::generator();
+            let s1: FE = GE::from(&self.proof.s1);
+            let e: FE = GE::from(&self.proof.e.0);
             (ec_gen * s1, (self.X * e) + self.u)
         };
 
