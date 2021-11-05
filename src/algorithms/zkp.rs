@@ -872,11 +872,11 @@ impl BobZkpInit {
             alice_setup: alice_setup.clone(),
             alpha: BigInt::sample_below(&q.pow(3)),
             beta: BigInt::from_paillier_key(&alice_ek),
-            gamma: Randomness::sample(&alice_ek).0,
+            gamma: BigInt::sample_below(&(q.pow(2) * &alice_ek.n)),
             ro: BigInt::sample_below(&(q * alice_setup.N_tilde.borrow())),
             ro_prim: BigInt::sample_below(&(q.pow(3) * alice_setup.N_tilde.borrow())),
             sigma: BigInt::sample_below(&(q * alice_setup.N_tilde.borrow())),
-            tau: BigInt::sample_below(&(q * alice_setup.N_tilde.borrow())),
+            tau: BigInt::sample_below(&(q.pow(3) * alice_setup.N_tilde.borrow())),
         }
     }
     fn N(&self) -> &BigInt {
