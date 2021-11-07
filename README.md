@@ -29,8 +29,6 @@ Our version improves existing solutions by addition of several key features:
 * Parties are identified in the protocol by PartyId structure. It makes a party identifier unique and independent from other parameters of the protocol, such as x-coordinate in Shamir secret sharing. 
 * The list of ids of parties that generated a key is stored next to that key. It allows the signing algorithm to choose a quorum from parties that are known to be online.
 * Protocol timeout detection is supported by the state machine.     
-* Heavy range proofs for MtA part of the protocol ( see signing section ) are interchangeable with simplified proofs as a run-time option defined per key ( see [1] ch.5 for details ).
-This allows improving the performance of the signing protocol. 
 * The initial partial private key is not copied to the protocol memory. 
 Instead, the machine fetches the key via the SecureKeyLoader interface from an extern secure vault.
 Fetching happens when the key is needed for the generation of shares, and the key bytes are zeroed afterward.
@@ -129,7 +127,7 @@ The input for the protocol contains:
 *  Initial keys - public part   
 *  Reference to a wallet: storage for initial keys
 *  A secret loader which fetches keys from the wallet
-*  Optional range proof setup
+*  Optional range proof setup ( Note: the signing protocol is proven to be insecure when used without range proofs. Current version of the library returns error if range proof setup is not presented to keygen protocol)
 *  Optional protocol timeout (recommended to be provided). 
  
 The first phase of the protocol is created by calling **Phase1::new()** method, which takes all the parameters above.
@@ -251,6 +249,8 @@ The complete result of the protocol can be obtained in JSON format by running th
 
 The run results in creating  #total_number_of_signers# files containing MultiPartyInfo structure serialized into JSON.
 File names can be tweaked by *output_file_name_prefix*.
+
+Note: the signing protocol is proven to be **insecure when used without range proofs**. The keygen example quits with the error if the range proof setup option is not used)
 
 #### The generator of zero knowledge range proof setup
 

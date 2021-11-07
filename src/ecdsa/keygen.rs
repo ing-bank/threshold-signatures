@@ -382,6 +382,10 @@ impl Phase1 {
         if let Some(setup) = &range_proof_setup {
             verify_zkp_public_setup(setup)
                 .map_err(|e| KeygenError::ProtocolSetupError(format!("{:?}", e)))?;
+        } else {
+            return Err(KeygenError::ProtocolSetupError(
+                "Using this signature scheme without range proofs is insecure".to_string(),
+            ));
         }
         Ok(Phase1 {
             params: *params,
@@ -1153,7 +1157,8 @@ mod tests {
         }
     }
 
-    #[test]
+    // The test has been dropped. The signing protocol is proven to be insecure when used without range proofs.
+    #[allow(dead_code)]
     fn keygen() -> anyhow::Result<()> {
         let _ = env_logger::builder().is_test(true).try_init();
         keygen_helper(false)
