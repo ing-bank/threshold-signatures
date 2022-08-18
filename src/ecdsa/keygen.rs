@@ -105,18 +105,15 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use curv::cryptographic_primitives::proofs::sigma_dlog::DLogProof;
-//use curv::cryptographic_primitives::proofs::sigma_dlog::ProveDLog;
-use curv::cryptographic_primitives::secret_sharing::feldman_vss::VerifiableSS;
-use crate::ecdsa::{ECPoint, ECScalar, BigInt, FE, GE, PK, SK, CurvVerifiableSS};
-
-
-use crate::ecdsa::messages::{FeldmanVSS, SecretShare};
+use curv::cryptographic_primitives::secret_sharing::feldman_vss::{SecretShares, VerifiableSS};
 
 use crate::algorithms::nizk_rsa;
+use crate::ecdsa::messages::{FeldmanVSS, SecretShare};
 use crate::ecdsa::{
-    valid_public_key, is_valid_curve_point, CommitmentScheme, InitialPublicKeys,
-    ManagedPaillierDecryptionKey, ManagedSecretKey, PaillierKeys, Parameters,
+    is_valid_curve_point, valid_public_key, CommitmentScheme, InitialPublicKeys,
+    ManagedPaillierDecryptionKey, PaillierKeys, Parameters,
 };
+use crate::ecdsa::{BigInt, CurvVerifiableSS, Point, Scalar, FE, GE};
 use crate::protocol::{Address, PartyIndex};
 pub use paillier::DecryptionKey;
 use paillier::EncryptionKey;
@@ -129,11 +126,13 @@ use crate::state_machine::{State, StateMachineTraits, Transition};
 use serde::{Deserialize, Serialize};
 
 use crate::algorithms::zkp::{ZkpPublicSetup, ZkpSetup, ZkpSetupVerificationError};
+use curv::arithmetic::One;
+use curv::elliptic::curves::Secp256k1;
+use sha2::Sha256;
 use std::iter::FromIterator;
 use std::ops::Add;
 use std::sync::Arc;
 use std::time::Duration;
-use curv::arithmetic::One;
 use trace::trace;
 use zeroize::Zeroize;
 
@@ -179,13 +178,13 @@ pub enum KeygenError {
     InvalidVSS { vss: String, party: PartyIndex },
     #[error("Number of parties responded ({parties_responded}) is not same as share count ({share_count}) - 1")]
     NumberOfPartiesMismatch {
-        parties_responded: usize,
-        share_count: usize,
+        parties_responded: u16,
+        share_count: u16,
     },
     #[error("multiple points on the polynomial encountered {points:?}")]
     MultiplePointsUsed { points: String },
     #[error("received point has wrong X coordinate: {x_coord}")]
-    WrongXCoordinate { x_coord: usize },
+    WrongXCoordinate { x_coord: u16 },
     #[error("invalid public key {point}, party {party}")]
     InvalidPublicKey { point: String, party: PartyIndex },
     #[error("unexpected message {message_type:?}, party {party}")]
@@ -215,7 +214,7 @@ impl super::InitialKeys {
         let u = FE::random();
 
         #[allow(clippy::op_ref)]
-        let y = ECPoint::generator() * &u;
+        let y = Point::generator() * &u;
         super::InitialKeys {
             u_i: u,
             y_i: y,
@@ -240,11 +239,11 @@ pub struct MultiPartyInfo {
 }
 
 impl MultiPartyInfo {
-    pub fn own_point(&self) -> usize {
+    pub fn own_point(&self) -> u16 {
         self.secret_share.0
     }
-    pub fn own_share(&self) -> FE {
-        self.secret_share.1
+    pub fn own_share(&self) -> &FE {
+        &self.secret_share.1
     }
 }
 
@@ -336,7 +335,7 @@ pub struct Phase1 {
 
 #[doc(hidden)]
 fn verify_zkp_public_setup(setup: &ZkpSetup) -> Result<(), ZkpSetupVerificationError> {
-    let public_setup = ZkpPublicSetup::from_private_zkp_setup(&setup);
+    let public_setup = ZkpPublicSetup::from_private_zkp_setup(setup);
     public_setup.verify()
 }
 
@@ -355,7 +354,7 @@ impl Phase1 {
         let proof = {
             let dk = secret_key_loader
                 .get_paillier_secret()
-                .map(|dk| ManagedPaillierDecryptionKey(dk))
+                .map(ManagedPaillierDecryptionKey)
                 .map_err(|e| KeygenError::ProtocolSetupError(e.0))?;
             if !PaillierKeys::is_valid(&init_keys.paillier_encryption_key, &dk.0) {
                 return Err(KeygenError::ProtocolSetupError(
@@ -410,7 +409,7 @@ impl State<KeyGeneratorTraits> for Phase1 {
         let zkp_public_setup = self
             .range_proof_setup
             .as_ref()
-            .map(|s| ZkpPublicSetup::from_private_zkp_setup(&s));
+            .map(ZkpPublicSetup::from_private_zkp_setup);
 
         let output = vec![OutMsg {
             recipient: Address::Broadcast,
@@ -530,19 +529,19 @@ impl Phase2 {
     fn map_parties_to_shares(
         &self,
         party_list: Vec<PartyIndex>,
-        mut outgoing_shares: Vec<FE>,
+        outgoing_shares: SecretShares<Secp256k1>,
     ) -> HashMap<PartyIndex, SecretShare> {
         let party_indexes_sorted = party_list.into_iter().collect::<BTreeSet<_>>();
-        let number_of_parties = party_indexes_sorted.len();
+        let number_of_parties = party_indexes_sorted.len() as u16;
         let result = party_indexes_sorted
             .into_iter()
-            .zip(1..=number_of_parties)
+            .zip(1u16..=number_of_parties)
             .zip(outgoing_shares.iter().cloned())
             .map(|((party, index), share)| (party, (index, share)))
             .collect::<HashMap<_, _>>();
 
-        // Simultaneously remove and zeroize elements.
-        outgoing_shares.drain(..).for_each(|mut s| s.zeroize());
+        // TODO:: Simultaneously remove and zeroize elements.
+        //outgoing_shares.drain(..);
 
         result
     }
@@ -555,7 +554,7 @@ impl State<KeyGeneratorTraits> for Phase2 {
         Some(vec![OutMsg {
             recipient: Address::Broadcast,
             body: Message::R2(DecommitPublicKey {
-                y_i: self.keys.y_i,
+                y_i: self.keys.y_i.clone(),
                 blind_factor: self.comm_scheme.decomm.clone(),
             }),
         }])
@@ -613,7 +612,7 @@ impl State<KeyGeneratorTraits> for Phase2 {
                             comm: comm.com.clone(),
                             decomm: decomm.blind_factor.clone(),
                         };
-                        if scheme.verify_commitment(decomm.y_i) {
+                        if scheme.verify_commitment(&decomm.y_i) {
                             None
                         } else {
                             Some(KeygenError::InvalidComm {
@@ -637,10 +636,10 @@ impl State<KeyGeneratorTraits> for Phase2 {
         // make map of ids of parties which broadcast their partial pubkey
         let mut pubkey_map = decomms
             .iter()
-            .map(|(party, msg)| (*party, msg.y_i))
+            .map(|(party, msg)| (*party, msg.y_i.clone()))
             .collect::<HashMap<PartyIndex, GE>>();
         // add local public key too
-        pubkey_map.insert(self.own_party_index, self.keys.y_i);
+        pubkey_map.insert(self.own_party_index, self.keys.y_i.clone());
 
         let party_list = pubkey_map.keys().copied().collect::<Vec<PartyIndex>>();
 
@@ -650,10 +649,7 @@ impl State<KeyGeneratorTraits> for Phase2 {
             .map(|(party, msg)| (*party, msg.e.clone()))
             .collect::<HashMap<PartyIndex, EncryptionKey>>();
 
-        let sk_loader_result = self
-            .secret_key_loader
-            .get_initial_secret()
-            .map(|s| ManagedSecretKey(s));
+        let sk_loader_result = self.secret_key_loader.get_initial_secret();
         if let Err(e) = &sk_loader_result {
             errors.push(KeygenError::GeneralError(e.0.clone()));
         }
@@ -666,16 +662,14 @@ impl State<KeyGeneratorTraits> for Phase2 {
 
         let (vss_scheme, outgoing_shares) = {
             let sk = sk_loader_result.unwrap();
-            let vss_sharing =
-                VerifiableSS::share(self.params.threshold, self.params.share_count, &sk.0);
-            vss_sharing
+            VerifiableSS::share(self.params.threshold, self.params.share_count, &sk)
         }; // sk is dropped here
 
         let mapped_shares = self.map_parties_to_shares(party_list, outgoing_shares);
         let (parties_points, own_point): (Vec<(_, _)>, Vec<(_, _)>) = mapped_shares
             .into_iter()
             .partition(|(party, _)| *party != self.own_party_index);
-        let own_point = own_point[0].1;
+        let own_point = own_point[0].1.clone();
         let other_points = parties_points
             .into_iter()
             .map(|(party, share_xy)| (party, share_xy))
@@ -710,9 +704,7 @@ impl State<KeyGeneratorTraits> for Phase2 {
 /// Returns Ok(Some(pk)) on success
 /// Returns Ok(None) if the input list of points is empty
 /// Uses PublicKey type from underlying secp256k1 library to work around limited API in curv crate
-fn try_computing_public_key(
-    pubkey_map: &HashMap<PartyIndex, GE>,
-) -> Result<PK, Vec<KeygenError>> {
+fn try_computing_public_key(pubkey_map: &HashMap<PartyIndex, GE>) -> Result<GE, Vec<KeygenError>> {
     if pubkey_map.is_empty() {
         return Err(vec![KeygenError::GeneralError(
             "cant reconstruct public key: input list is empty".to_string(),
@@ -729,13 +721,13 @@ fn try_computing_public_key(
         evec
     });
 
+    // TOTO: check if inner Option in GE can be used here
     if evec.is_empty() {
-        let acc: Option<PK> = None;
+        let acc: Option<GE> = None;
         let sum = pubkey_map.iter().fold(acc, |acc, point| match acc {
             None => Some(point.1.clone()),
             Some(v) => Some(
-                v.add(point.1)
-                   // TODO: check is zero... .expect("invalid curve point"),
+                v.add(point.1), // TODO: check is zero... .expect("invalid curve point"),
             ),
         });
         Ok(sum.unwrap())
@@ -772,7 +764,7 @@ impl State<KeyGeneratorTraits> for Phase3 {
                     recipient: Address::Peer(*party),
                     body: Message::R3(FeldmanVSS {
                         vss: self.vss_scheme.clone(),
-                        share: *share_xy,
+                        share: share_xy.clone(),
                     }),
                 })
                 .collect::<OutMsgVec>(),
@@ -834,7 +826,9 @@ impl State<KeyGeneratorTraits> for Phase3 {
 
         let private_share = shares
             .iter()
-            .fold(self.own_point.1, |acc, (_party, fvss)| acc + fvss.share.1);
+            .fold(self.own_point.1.clone(), |acc, (_party, fvss)| {
+                acc + &fvss.share.1
+            });
 
         shares.values_mut().for_each(|x| x.zeroize());
 
@@ -849,7 +843,7 @@ impl State<KeyGeneratorTraits> for Phase3 {
         let dk_loader_result = self
             .secret_key_loader
             .get_paillier_secret()
-            .map(|dk| ManagedPaillierDecryptionKey(dk));
+            .map(ManagedPaillierDecryptionKey);
 
         if let Err(e) = &dk_loader_result {
             errors.push(KeygenError::GeneralError(e.0.clone()));
@@ -912,7 +906,7 @@ struct Phase4 {
 impl State<KeyGeneratorTraits> for Phase4 {
     fn start(&mut self) -> Option<OutMsgVec> {
         log::debug!("Phase4 starts");
-        let dlog_proof = DLogProof::prove(&self.multiparty_shared.own_share());
+        let dlog_proof = DLogProof::prove(self.multiparty_shared.own_share());
         Some(vec![OutMsg {
             recipient: Address::Broadcast,
             body: Message::R4(dlog_proof),
@@ -930,19 +924,20 @@ impl State<KeyGeneratorTraits> for Phase4 {
     }
 
     fn consume(&self, current_msg_set: Vec<InMsg>) -> Transition<KeyGeneratorTraits> {
-        let proofs = match to_hash_map_gen::<PartyIndex, DLogProof>(current_msg_set) {
-            Ok(p) => p,
-            Err(e) => {
-                let err_state = ErrorState::new(e);
-                log::error!("Phase4 returns {:?}", err_state);
-                return Transition::FinalState(Err(err_state));
-            }
-        };
+        let proofs =
+            match to_hash_map_gen::<PartyIndex, DLogProof<Secp256k1, Sha256>>(current_msg_set) {
+                Ok(p) => p,
+                Err(e) => {
+                    let err_state = ErrorState::new(e);
+                    log::error!("Phase4 returns {:?}", err_state);
+                    return Transition::FinalState(Err(err_state));
+                }
+            };
 
         let verification_error_vec = proofs
             .iter()
             .filter_map(|(party, msg)| {
-                if DLogProof::verify(&msg).is_ok() {
+                if DLogProof::verify(msg).is_ok() {
                     None
                 } else {
                     Some(KeygenError::InvalidDlogProof {
@@ -995,12 +990,12 @@ impl State<KeyGeneratorTraits> for Phase4 {
 /// Maps [`PartyIndex`] to a number. Used in the calculation of Lagrange's coefficients in the signing protocol as only some parties take part in it   
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Party2PointMap {
-    pub points: HashMap<PartyIndex, usize>,
+    pub points: HashMap<PartyIndex, u16>,
 }
 
 impl Party2PointMap {
     #[trace(pretty)]
-    pub fn map_signing_parties_to_points(&self, signing_parties: &[PartyIndex]) -> Vec<usize> {
+    pub fn map_signing_parties_to_points(&self, signing_parties: &[PartyIndex]) -> Vec<u16> {
         let mut present = Vec::new();
         let mut absent = Vec::new();
         for idx in signing_parties {
@@ -1028,21 +1023,21 @@ impl Party2PointMap {
             .into_iter()
             .map(|x| {
                 let index_bn = BigInt::from(x as u32);
-                ECScalar::from(&index_bn)
+                Scalar::from(&index_bn)
             })
             .collect::<Vec<FE>>();
 
         let fold_with_one = |op: &dyn Fn(FE, &FE) -> FE| {
             subset_of_fe_points
                 .iter()
-                .filter(|x| (*x).get_element() != own_x.get_element())
-                .fold(ECScalar::from(&BigInt::one()), |acc: FE, x| op(acc, x))
+                .filter(|x| (**x) != own_x)
+                .fold(Scalar::from(&BigInt::one()), |acc: FE, x| op(acc, x))
         };
 
         let num_fun = |acc: FE, x: &FE| acc * x;
-        let denom_fun = |acc: FE, x: &FE| acc * x.sub(&own_x.get_element());
+        let denom_fun = |acc: FE, x: &FE| acc * (x - &own_x);
 
-        fold_with_one(&denom_fun).invert() * fold_with_one(&num_fun)
+        fold_with_one(&denom_fun).invert().unwrap() * fold_with_one(&num_fun)
     }
 }
 /// Result of key generation protocol
@@ -1053,6 +1048,7 @@ pub struct FinalState {
 
 /// Container of `KeygenError` type
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct ErrorState {
     errors: Vec<KeygenError>,
 }
@@ -1071,17 +1067,16 @@ mod tests {
         SecretKeyLoaderError,
     };
     use crate::ecdsa::messages::SecretShare;
+    use crate::ecdsa::{all_mapped_equal, BigInt, FE, GE};
     use crate::ecdsa::{InitialKeys, InitialPublicKeys, PaillierKeys, Parameters};
     use crate::protocol::{Address, InputMessage, PartyIndex};
     use crate::state_machine::sync_channels::StateMachine;
     use anyhow::bail;
     use crossbeam_channel::{Receiver, Sender};
+    use curv::arithmetic::Zero;
     use curv::cryptographic_primitives::secret_sharing::feldman_vss::VerifiableSS;
-    use curv::elliptic::curves::secp256_k1::Secp256k1Scalar;
-    use curv::elliptic::curves::traits::{ECPoint, ECScalar};
-    use curv::{BigInt, FE, GE};
     use paillier::DecryptionKey;
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
     use std::fs::File;
     use std::io::Write;
     use std::path::Path;
@@ -1126,7 +1121,7 @@ mod tests {
     }
 
     impl SecretKeyLoader for SecretKeyLoaderImpl {
-        fn get_initial_secret(&self) -> Result<Box<Secp256k1Scalar>, SecretKeyLoaderError> {
+        fn get_initial_secret(&self) -> Result<Box<FE>, SecretKeyLoaderError> {
             let wallet = self
                 .wallet
                 .lock()
@@ -1137,7 +1132,8 @@ mod tests {
                     .records
                     .get(&self.key_index)
                     .ok_or(SecretKeyLoaderError("key not found".to_string()))?
-                    .u_i,
+                    .u_i
+                    .clone(),
             ))
         }
 
@@ -1314,26 +1310,34 @@ mod tests {
             .into_iter()
             .map(|x| x.unwrap().unwrap())
             .collect::<Vec<_>>();
-        let whole_public_keys = final_states
-            .iter()
-            .map(|fs| fs.multiparty_shared_info.public_key.get_element())
-            .collect::<HashSet<_>>();
 
-        assert_eq!(
-            whole_public_keys.len(),
-            1,
+        let all_keys_equal = all_mapped_equal(final_states.iter(), |fs| {
+            fs.multiparty_shared_info.public_key.clone()
+        });
+
+        assert!(
+            all_keys_equal,
             "public keys are not same: {:?}",
-            whole_public_keys
+            final_states
+                .iter()
+                .map(|fs| fs.multiparty_shared_info.public_key.clone())
         );
 
-        let public_key = whole_public_keys.into_iter().collect::<Vec<_>>()[0];
+        let public_key = &final_states
+            .get(0)
+            .unwrap()
+            .multiparty_shared_info
+            .public_key;
 
         let secret_shares = final_states
             .iter()
-            .map(|fs| fs.multiparty_shared_info.secret_share)
+            .map(|fs| fs.multiparty_shared_info.secret_share.clone())
             .collect::<Vec<_>>();
 
-        let _all_x_i = secret_shares.iter().map(|k| k.1).collect::<Vec<_>>();
+        let _all_x_i = secret_shares
+            .iter()
+            .map(|k| k.1.clone())
+            .collect::<Vec<_>>();
 
         // check if reassembled private key generates correct public key
         let sum_of_private_keys = shared_wallet_reference
@@ -1341,13 +1345,12 @@ mod tests {
             .expect("cant lock mutex")
             .records
             .values()
-            .fold(FE::zero(), |acc, keys| acc + keys.u_i);
+            .fold(FE::zero(), |acc, keys| acc + &keys.u_i);
 
-        let g: GE = ECPoint::generator();
-        let expected_pk: GE = g * sum_of_private_keys;
+        let g = GE::generator();
+        let expected_pk = g * &sum_of_private_keys;
         assert_eq!(
-            expected_pk.get_element(),
-            public_key,
+            expected_pk, *public_key,
             "whole public key does not match whole private key"
         );
 
@@ -1408,8 +1411,8 @@ mod tests {
             .iter()
             .map(|(x, y)| {
                 let index_bn = BigInt::from(*x as u64);
-                let x_coord: FE = ECScalar::from(&index_bn);
-                (x_coord, y)
+                let x_coord = FE::from(&index_bn);
+                (x_coord, y.clone())
             })
             .unzip();
         VerifiableSS::lagrange_interpolation_at_zero(&points, &shares)

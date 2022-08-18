@@ -1,12 +1,11 @@
 //! Implements Hash trait for Sha512-256 algorithm
-//use curv::arithmetic::traits::Converter;
-//use curv::cryptographic_primitives::hashing::traits::Hash;
-use super::{ECPoint, ECScalar,BigInt, FE, GE};
 
+use crate::BigInt;
+
+use crate::{BasicOps, BitManipulation, Converter};
 use rand::{thread_rng, Rng};
 use sha2::{Digest, Sha512Trunc256};
 use std::convert::TryFrom;
-use curv::arithmetic::{BasicOps, BitManipulation, Converter};
 
 pub struct HSha512Trunc256;
 
@@ -19,20 +18,34 @@ impl HSha512Trunc256 {
         Self::DIGEST_BIT_LENGTH == q.bit_length()
     }
 
+    pub fn create_hash(big_ints: &[&BigInt]) -> BigInt {
+        let mut hasher = Sha512Trunc256::new();
+
+        for value in big_ints {
+            let as_vec = BigInt::to_bytes(value); //BigInt::to_vec(value); //???
+            let vec_length = u16::try_from(as_vec.len()).expect("BigInt: bit length too big");
+            hasher.update(vec_length.to_le_bytes());
+            hasher.update(&as_vec);
+        }
+
+        let result_hex = hasher.finalize();
+        BigInt::from_bytes(&result_hex[..])
+    }
+
     pub fn create_hash_with_random_nonce(big_ints: &[&BigInt]) -> (BigInt, BigInt) {
         let mut nonce = [0u8; Self::NONCE_SIZE_BYTES];
         let mut hasher = Sha512Trunc256::new();
         thread_rng().fill(&mut nonce[..]);
 
-        hasher.input(nonce);
+        hasher.update(nonce);
         for value in big_ints {
             let as_vec = BigInt::to_bytes(value);
             let vec_length = u16::try_from(as_vec.len()).expect("BigInt: bit length too big");
-            hasher.input(vec_length.to_le_bytes());
-            hasher.input(&as_vec);
+            hasher.update(vec_length.to_le_bytes());
+            hasher.update(&as_vec);
         }
 
-        let result_hex = hasher.result();
+        let result_hex = hasher.finalize();
         (
             BigInt::from_bytes(&result_hex[..]),
             BigInt::from_bytes(&nonce[0..Self::NONCE_SIZE_BYTES]),
@@ -48,15 +61,15 @@ impl HSha512Trunc256 {
             input.insert(0, 0u8);
         }
 
-        hasher.input(input);
+        hasher.update(input);
         for value in big_ints {
             let as_vec = BigInt::to_bytes(value);
             let vec_length = u16::try_from(as_vec.len()).expect("BigInt: bit length too big");
-            hasher.input(vec_length.to_le_bytes());
-            hasher.input(&as_vec);
+            hasher.update(vec_length.to_le_bytes());
+            hasher.update(&as_vec);
         }
-        let result_hex = hasher.result();
-        (BigInt::from(&result_hex[..]), nonce.clone())
+        let result_hex = hasher.finalize();
+        (BigInt::from_bytes(&result_hex[..]), nonce.clone())
     }
 
     pub fn create_hash_bounded_by_q(big_ints: &[&BigInt], q: &BigInt) -> (BigInt, BigInt) {
@@ -76,50 +89,20 @@ impl HSha512Trunc256 {
     }
 }
 
-// impl Hash for HSha512Trunc256 {
-//     fn create_hash(big_ints: &[&BigInt]) -> BigInt {
-//         let mut hasher = Sha512Trunc256::new();
-//
-//         for value in big_ints {
-//             let as_vec = BigInt::to_vec(value);
-//             let vec_length = u16::try_from(as_vec.len()).expect("BigInt: bit length too big");
-//             hasher.input(vec_length.to_le_bytes());
-//             hasher.input(&as_vec);
-//         }
-//
-//         let result_hex = hasher.result();
-//         BigInt::from(&result_hex[..])
-//     }
-//
-//     fn create_hash_from_slice(_: &[u8]) -> BigInt {
-//         unimplemented!()
-//     }
-//
-//     fn create_hash_from_ge(ge_vec: &[&GE]) -> FE {
-//         let mut hasher = Sha512Trunc256::new();
-//         for value in ge_vec {
-//             hasher.input(&value.pk_to_key_slice());
-//         }
-//
-//         let result_hex = hasher.result();
-//         let result = BigInt::from(&result_hex[..]);
-//         ECScalar::from(&result)
-//     }
-// }
-
 #[cfg(test)]
 mod tests {
-    use super::FE;
     use crate::algorithms::sha::HSha512Trunc256;
     use curv::arithmetic::traits::Samplable;
-    use curv::elliptic::curves::traits::ECScalar;
+    use curv::arithmetic::BasicOps;
+    use curv::elliptic::curves::{Scalar, Secp256k1};
     use paillier::BigInt;
+    type FE = Scalar<Secp256k1>;
 
     #[test]
     fn hash_with_random_nonce() {
         (1..1000).for_each(|_| {
-            let alpha = BigInt::sample_below(&FE::q().pow(3));
-            let beta = BigInt::sample_below(&FE::q().pow(3));
+            let alpha = BigInt::sample_below(&FE::group_order().pow(3));
+            let beta = BigInt::sample_below(&FE::group_order().pow(3));
             let gamma = BigInt::sample_below(&alpha);
             let input_slice = [&alpha, &beta, &gamma, &alpha, &beta, &gamma];
             let (hash, nonce) = HSha512Trunc256::create_hash_with_random_nonce(&input_slice);

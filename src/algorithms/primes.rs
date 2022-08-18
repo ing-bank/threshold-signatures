@@ -1,8 +1,10 @@
 //!  Generate safe primes
 
 #![allow(non_snake_case)]
-use curv::arithmetic::traits::{BitManipulation, NumberTests, Samplable};
-use curv::BigInt;
+use crate::algorithms::Powm;
+use crate::BigInt;
+use crate::{BitManipulation, NumberTests, Samplable};
+use curv::arithmetic::{Integer, One, Zero};
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
 use zeroize::Zeroize;
@@ -157,6 +159,7 @@ pub fn miller_rabin(n: &BigInt, limit: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use crate::algorithms::primes::is_prime;
+    use curv::arithmetic::{BitManipulation, One};
     use curv::BigInt;
 
     static FIRST_PRIMES: [u32; 75] = [
@@ -179,8 +182,8 @@ mod tests {
         assert_eq!(p.bit_length(), DEFAULT_BIT_LENGTH);
         assert_eq!(p_prim.bit_length(), DEFAULT_BIT_LENGTH - 1);
 
-        assert!(p.tstbit(DEFAULT_BIT_LENGTH - 1));
-        assert!(p_prim.tstbit(DEFAULT_BIT_LENGTH - 2));
+        assert!(p.test_bit(DEFAULT_BIT_LENGTH - 1));
+        assert!(p_prim.test_bit(DEFAULT_BIT_LENGTH - 2));
 
         assert!(is_prime(&p, DEFAULT_BIT_LENGTH));
         assert!(is_prime(&p_prim, DEFAULT_BIT_LENGTH - 1));

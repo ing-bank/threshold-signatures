@@ -133,7 +133,7 @@ impl<'a> Deserialize<'a> for PartyIndex {
 }
 
 /// Message destination address type
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub enum Address {
     Peer(PartyIndex),
     Broadcast,
