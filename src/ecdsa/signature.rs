@@ -65,14 +65,17 @@ use super::messages::signing::{
     SignBroadcastPhase1, SignDecommitPhase4,
 };
 use super::signature::phase5::LocalSignature;
-use crate::ecdsa::{is_valid_curve_point, CommitmentScheme, MessageHashType, PaillierKeys, SigningParameters, CurvDLogProofType};
+use crate::ecdsa::{
+    is_valid_curve_point, CommitmentScheme, CurvDLogProofType, MessageHashType, PaillierKeys,
+    Scalar, SigningParameters,
+};
 use crate::protocol::{Address, PartyIndex};
 
-use sha2::{Digest, Sha256};
 use curv::cryptographic_primitives::hashing::DigestExt;
 use curv::cryptographic_primitives::proofs::sigma_correct_homomorphic_elgamal_enc::HomoElGamalStatement;
+use sha2::{Digest, Sha256};
 
-use crate::ecdsa::{ECPoint, ECScalar,BigInt, FE, GE};
+use crate::ecdsa::{BigInt, FE, GE};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -87,8 +90,10 @@ use crate::algorithms::zkp::MTAMode::{MtA, MtAwc};
 use crate::algorithms::zkp::{AliceProof, BobProofType, MessageA, MessageB};
 use crate::ecdsa::keygen::RangeProofSetups;
 use crate::ecdsa::signature::mta::MtaAliceOutput;
+use curv::arithmetic::Integer;
 use paillier::{Decrypt, EncryptionKey, Paillier, RawCiphertext};
 use std::iter::FromIterator;
+use std::ops::Mul;
 use trace::trace;
 
 /// Enumerates error types which can be raised by signing protocol
@@ -126,7 +131,10 @@ pub enum SigningError {
     MissingPhase1Commitment(PartyIndex),
 
     #[error("Dlog proof failed party {party:?} proofs {proof:?}")]
-    DlogProofFailed { party: PartyIndex, proof: CurvDLogProofType },
+    DlogProofFailed {
+        party: PartyIndex,
+        proof: CurvDLogProofType,
+    },
     #[error("invalid decommitment at phase 4 , party {party:?}")]
     InvalidDecommitment { party: PartyIndex },
     #[error("invalid ElGamal proof at phase 5b , party {party:?}")]
@@ -160,7 +168,6 @@ mod mta {
     use crate::algorithms::zkp::{MessageA, ZkpSetup};
     use crate::ecdsa::{CurvDLogProofType, PaillierKeys};
 
-    use super::{ECPoint, ECScalar};
     use super::{FE, GE};
     use std::collections::HashMap;
 
@@ -185,7 +192,7 @@ mod mta {
 
         match (proof, alice_ek) {
             (Some(proof), Some(enc_key)) => {
-                if proof.verify(cipher, &enc_key, bob_setup) {
+                if proof.verify(cipher, enc_key, bob_setup) {
                     Ok(())
                 } else {
                     Err(SigningError::AliceProofFailed {
@@ -231,9 +238,9 @@ mod mta {
         match proof {
             // the simplified proof as defined in GG18, ch.5 , p.19
             BobProofType::DLogProofs(dlog_proofs) => {
-                let g  = GE::generator();
-                let g_alpha = g * alpha;
-                let ba_btag = dlog_proofs.b_proof.pk * a + dlog_proofs.beta_tag_proof.pk;
+                let g = GE::generator();
+                let g_alpha = g * &alpha;
+                let ba_btag = &dlog_proofs.b_proof.pk * a + &dlog_proofs.beta_tag_proof.pk;
                 if CurvDLogProofType::verify(&dlog_proofs.b_proof).is_err() {
                     errors.push(SigningError::DlogProofFailed {
                         party: *party,
@@ -249,14 +256,13 @@ mod mta {
                 if ba_btag != g_alpha {
                     errors.push(SigningError::GeneralError(format!(
                         "DlogProof: eq doesn't hold, g^alpha {:?}, B^a* B_prim {:?} ",
-                        &g_alpha,
-                        &ba_btag
+                        &g_alpha, &ba_btag
                     )));
                 }
             }
             // Bob's range proof
             RangeProof(range_proof) => {
-                if !range_proof.verify(a_enc, &mta_output, &alice_keys.ek, &alice_setup.unwrap()) {
+                if !range_proof.verify(a_enc, mta_output, &alice_keys.ek, alice_setup.unwrap()) {
                     errors.push(SigningError::BobProofFailed {
                         party: *party,
                         proof: proof.clone(),
@@ -265,7 +271,7 @@ mod mta {
             }
             // Bob's range proof with proof of knowing b and beta_prim
             RangeProofExt(range_proof) => {
-                if !range_proof.verify(a_enc, &mta_output, &alice_keys.ek, &alice_setup.unwrap()) {
+                if !range_proof.verify(a_enc, mta_output, &alice_keys.ek, alice_setup.unwrap()) {
                     errors.push(SigningError::BobProofFailed {
                         party: *party,
                         proof: proof.clone(),
@@ -283,13 +289,12 @@ mod mta {
 
 ///The module dedicated to ZKP in the Phase5
 mod phase5 {
-    use super::{
-        trace, CommitmentScheme, ECDSAError, ECPoint, ECScalar, DigestExt, MessageHashType, FE,
-        GE, Sha256
-    };
+
+    use super::{trace, CommitmentScheme, DigestExt, ECDSAError, MessageHashType, Sha256, FE, GE};
     use crate::ecdsa::messages::signing::{Phase5Com1, Phase5Com2, Phase5Decom1, Phase5Decom2};
     use crate::ecdsa::signature::ECDSAError::VerificationFailed;
-    use crate::ecdsa::Signature;
+    use crate::ecdsa::{Point, Scalar, Signature};
+    use crate::Integer;
     use curv::cryptographic_primitives::proofs::sigma_correct_homomorphic_elgamal_enc::{
         HomoELGamalProof, HomoElGamalStatement, HomoElGamalWitness,
     };
@@ -312,38 +317,40 @@ mod phase5 {
         /// Chooses  $` \ell_{i}, \space \rho_{i}  \underset{R}{\in} Z_q `$     
         pub fn new(message_hash: &MessageHashType, R: &GE, k_i: &FE, sigma_i: &FE) -> Self {
             // H'(R) = Rx mod q
-            let r: FE = ECScalar::from(&R.x_coor().unwrap().mod_floor(&FE::q()));
-            let s_i = (*message_hash) * k_i + r * sigma_i; // <- partial signature
-            let l_i: FE = ECScalar::new_random();
-            let rho_i: FE = ECScalar::new_random();
+            let r = &FE::from(&R.x_coord().unwrap().mod_floor(FE::group_order()));
+            let s_i = message_hash * k_i + r * sigma_i; // <- partial signature
+            let l_i = FE::random();
+            let rho_i = FE::random();
             Self {
                 l_i,
                 rho_i,
-                R: *R,
+                R: R.clone(),
                 s_i,
             }
         }
 
         /// generates (Comm,Decomm) for $` V_{i} , \space A_{i} `$
         pub fn phase5b_proof(&self) -> (Phase5Com1, Phase5Decom1) {
-            let g: GE = ECPoint::generator();
-            let A_i = g * self.rho_i;
-            let l_i_rho_i = self.l_i.mul(&self.rho_i.get_element());
-            let V_i = self.R * self.s_i + g * self.l_i;
+            let g = Point::generator();
+            let A_i = g * &self.rho_i;
+            let l_i_rho_i = &self.l_i * &self.rho_i;
+            let V_i = &self.R * &self.s_i + g * &self.l_i;
             let B_i = g * l_i_rho_i;
-            let input_hash = Sha256::new().chain_points(&[&V_i, &A_i, &B_i]).to_big_int();
+            let input_hash = Sha256::new()
+                .chain_points([&V_i, &A_i, &B_i])
+                .result_bigint();
             let commitment_scheme = CommitmentScheme::from_BigInt(&input_hash);
 
             let witness = HomoElGamalWitness {
-                r: self.l_i,
-                x: self.s_i,
+                r: self.l_i.clone(),
+                x: self.s_i.clone(),
             };
             let delta = HomoElGamalStatement {
-                G: A_i,
-                H: self.R,
-                Y: g,
-                D: V_i,
-                E: B_i,
+                G: A_i.clone(),
+                H: self.R.clone(),
+                Y: g.to_point(),
+                D: V_i.clone(),
+                E: B_i.clone(),
             };
             let proof = HomoELGamalProof::prove(&witness, &delta);
             (
@@ -362,9 +369,9 @@ mod phase5 {
 
         /// generates (Comm, Decomm) for $` U_{i}, \space T_{i} `$
         pub fn phase5d_proof(&self, v: GE, a: GE) -> (Phase5Com2, Phase5Decom2) {
-            let u_i = v * self.rho_i;
-            let t_i = a * self.l_i;
-            let input_hash = Sha256::new().chain_points(&[&u_i, &t_i]).to_big_int();
+            let u_i = v * &self.rho_i;
+            let t_i = a * &self.l_i;
+            let input_hash = Sha256::new().chain_points([&u_i, &t_i]).result_bigint();
             let scheme = CommitmentScheme::from_BigInt(&input_hash);
             (
                 Phase5Com2 { com: scheme.comm },
@@ -382,8 +389,8 @@ mod phase5 {
             pubkey: &GE,
             message: &MessageHashType,
         ) -> Result<Signature, ECDSAError> {
-            let s = s_vec.iter().fold(self.s_i, |acc, x| acc + x);
-            let r: FE = ECScalar::from(&self.R.x_coor().unwrap().mod_floor(&FE::q()));
+            let s = s_vec.iter().fold(self.s_i.clone(), |acc, x| acc + x);
+            let r: FE = Scalar::from(&self.R.x_coord().unwrap().mod_floor(FE::group_order()));
             let sig = Signature { r, s };
             if sig.verify(pubkey, message) {
                 Ok(sig)
@@ -421,6 +428,7 @@ pub struct SignedMessage {
 
 /// vector of signing errors
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct ErrorState {
     errors: Vec<SigningError>,
 }
@@ -517,7 +525,7 @@ impl Phase1 {
                 "own party index not in the list of signing parties".to_string(),
             ));
         }
-        if multi_party_info.key_params.signers() > signing_parties.len() {
+        if multi_party_info.key_params.signers() > signing_parties.len() as u16 {
             return Err(SigningError::ProtocolSetupError(
                 "the number of parties is less than required threshold".to_string(),
             ));
@@ -558,34 +566,30 @@ impl Phase1 {
             )));
         }
 
-        let public_key = multi_party_info.public_key.get_element();
-        if !is_valid_curve_point(public_key) {
+        let public_key = multi_party_info.public_key.clone();
+        if !is_valid_curve_point(&public_key) {
             return Err(SigningError::InvalidPublicKey {
                 point: format!("{:?}", public_key),
             });
         }
-        let k_i = ECScalar::new_random();
+        let k_i = FE::random();
+        let ek = &multi_party_info.own_he_keys.ek;
 
         let mta_a = if let Some(setups) = &multi_party_info.range_proof_setups {
             MtaAliceOutput::WithRangeProofs(
                 setups
                     .party_setups
                     .iter()
-                    .map(|(p, setup)| {
-                        (
-                            *p,
-                            MessageA::new(&k_i, &multi_party_info.own_he_keys.ek, Some(setup)),
-                        )
-                    })
+                    .map(|(p, setup)| (*p, MessageA::new(&k_i, ek, Some(setup))))
                     .collect::<HashMap<_, _>>(),
             )
         } else {
-            MtaAliceOutput::Simple(MessageA::new(&k_i, &multi_party_info.own_he_keys.ek, None))
+            MtaAliceOutput::Simple(MessageA::new(&k_i, ek, None))
         };
 
-        let gamma_i: FE = ECScalar::new_random();
-        let g: GE = ECPoint::generator();
-        let g_gamma_i = g * gamma_i;
+        let gamma_i = FE::random();
+        let g = GE::generator();
+        let g_gamma_i = g.mul(&gamma_i);
         let comm_scheme = CommitmentScheme::from_GE(&g_gamma_i);
 
         Ok(Phase1 {
@@ -716,8 +720,8 @@ impl State<SigningTraits> for Phase1 {
             params: self.params.clone(),
             multi_party_info: self.multi_party_info.clone(),
             other_parties: self.other_parties.clone(),
-            gamma_i: self.gamma_i,
-            k_i: self.k_i,
+            gamma_i: self.gamma_i.clone(),
+            k_i: self.k_i.clone(),
             comm_scheme: self.comm_scheme.clone(),
             mta_inputs,
             commitments,
@@ -855,7 +859,7 @@ impl State<SigningTraits> for Phase2a {
             return Transition::FinalState(Err(error_state));
         }
 
-        let ki_gamma_i = self.k_i.mul(&self.gamma_i.get_element());
+        let ki_gamma_i = &self.k_i * &self.gamma_i;
         let delta_i = alpha_vec.iter().fold(FE::zero(), |acc, x| acc + x)
             + self
                 .beta_outputs
@@ -868,8 +872,8 @@ impl State<SigningTraits> for Phase2a {
             params: self.params.clone(),
             multi_party_shared_info: self.multi_party_info.clone(),
             other_parties: self.other_parties.clone(),
-            gamma_i: self.gamma_i,
-            k_i: self.k_i,
+            gamma_i: self.gamma_i.clone(),
+            k_i: self.k_i.clone(),
             w_i: FE::zero(),
             comm_scheme: self.comm_scheme.clone(),
             commitments: self.commitments.clone(),
@@ -918,8 +922,8 @@ impl State<SigningTraits> for Phase2b {
         log::debug!("Phase 2b starts");
         // calculate new lagrange coefficients according to teh list of parties which will sign
 
-        let x_i: FE = self.multi_party_shared_info.own_share();
-        let own_x: FE = ECScalar::from(&BigInt::from(
+        let x_i: FE = self.multi_party_shared_info.own_share().clone();
+        let own_x: FE = Scalar::from(&BigInt::from(
             self.multi_party_shared_info.own_point() as u64
         ));
 
@@ -1023,7 +1027,7 @@ impl State<SigningTraits> for Phase2b {
             return Transition::FinalState(Err(error_state));
         }
 
-        let ki_w_i = self.k_i.mul(&self.w_i.get_element());
+        let ki_w_i = &self.k_i * &self.w_i;
         let sigma_i = alpha_vec.iter().fold(FE::zero(), |acc, x| acc + x)
             + self
                 .omega_outputs
@@ -1036,11 +1040,11 @@ impl State<SigningTraits> for Phase2b {
             params: self.params.clone(),
             multi_party_info: self.multi_party_shared_info.clone(),
             other_parties: self.other_parties.clone(),
-            gamma_i: self.gamma_i,
-            k_i: self.k_i,
+            gamma_i: self.gamma_i.clone(),
+            k_i: self.k_i.clone(),
             comm_scheme: self.comm_scheme.clone(),
             commitments: self.commitments.clone(),
-            delta_i: self.delta_i,
+            delta_i: self.delta_i.clone(),
             sigma_i,
             timeout: self.timeout,
         }))
@@ -1080,7 +1084,7 @@ impl State<SigningTraits> for Phase3 {
         let output = vec![OutMsg {
             recipient: Address::Broadcast,
             body: Message::R3(Phase3data {
-                delta_i: self.delta_i,
+                delta_i: self.delta_i.clone(),
             }),
         }];
         Some(output)
@@ -1111,19 +1115,21 @@ impl State<SigningTraits> for Phase3 {
 
         let delta = responses
             .iter()
-            .fold(self.delta_i, |acc, (_party, msg)| acc + msg.delta_i);
-        let delta_inv = delta.invert();
+            .fold(self.delta_i.clone(), |acc, (_party, msg)| {
+                acc + &msg.delta_i
+            });
+        let delta_inv = delta.invert().expect("can't invert Delta");
 
         Transition::NewState(Box::new(Phase4 {
             params: self.params.clone(),
             multi_party_info: self.multi_party_info.clone(),
             other_parties: self.other_parties.clone(),
-            gamma_i: self.gamma_i,
-            k_i: self.k_i,
+            gamma_i: self.gamma_i.clone(),
+            k_i: self.k_i.clone(),
             comm_scheme: self.comm_scheme.clone(),
             commitments: self.commitments.clone(),
             delta_inv,
-            sigma_i: self.sigma_i,
+            sigma_i: self.sigma_i.clone(),
             timeout: self.timeout,
         }))
     }
@@ -1161,8 +1167,8 @@ struct Phase4 {
 impl State<SigningTraits> for Phase4 {
     fn start(&mut self) -> Option<OutMsgVec> {
         log::debug!("Phase 4 starts");
-        let g: GE = ECPoint::generator();
-        let g_gamma_i = g * self.gamma_i;
+        let g = GE::generator();
+        let g_gamma_i = g * &self.gamma_i;
         let output = vec![OutMsg {
             recipient: Address::Broadcast,
             body: Message::R4(SignDecommitPhase4 {
@@ -1208,8 +1214,8 @@ impl State<SigningTraits> for Phase4 {
                         .clone(),
                     decomm: msg.blind_factor.clone(),
                 };
-                if is_valid_curve_point(msg.g_gamma_i.get_element())
-                    && foreign_comm_scheme.verify_commitment(msg.g_gamma_i)
+                if is_valid_curve_point(&msg.g_gamma_i)
+                    && foreign_comm_scheme.verify_commitment(&msg.g_gamma_i)
                     && CurvDLogProofType::verify(&msg.gamma_proof).is_ok()
                 // TODO : map 2 possible bad outcomes into 2 errors
                 {
@@ -1222,14 +1228,14 @@ impl State<SigningTraits> for Phase4 {
             .collect::<Vec<_>>();
 
         if verification_errors.is_empty() {
-            let g: GE = ECPoint::generator();
-            let g_gamma_i = g * self.gamma_i;
+            let g = GE::generator();
+            let g_gamma_i = g * &self.gamma_i;
 
             let g_gamma_sum = responses
                 .iter()
-                .fold(g_gamma_i, |acc, msg| acc + msg.1.g_gamma_i);
+                .fold(g_gamma_i, |acc, msg| acc + &msg.1.g_gamma_i);
 
-            let R = g_gamma_sum * self.delta_inv;
+            let R = g_gamma_sum * &self.delta_inv;
             let local_sig =
                 LocalSignature::new(&self.params.message_hash, &R, &self.k_i, &self.sigma_i);
             let (p5_commit, p5_decommit) = local_sig.phase5b_proof();
@@ -1239,7 +1245,7 @@ impl State<SigningTraits> for Phase4 {
                 multi_party_info: self.multi_party_info.clone(),
                 other_parties: self.other_parties.clone(),
                 R,
-                sigma_i: self.sigma_i,
+                sigma_i: self.sigma_i.clone(),
                 local_sig,
                 p5_commit,
                 p5_decommit,
@@ -1305,14 +1311,16 @@ struct Phase5ab {
 impl Phase5ab {
     fn check_comms_A(&self, party: &PartyIndex, msg: &Phase5Decom1) -> Result<(), SigningError> {
         let comm = self.p5_commitments.get(party).unwrap();
-        let input_hash = Sha256::new().chain_points(&[&msg.V_i, &msg.A_i, &msg.B_i]).to_big_int();
+        let input_hash = Sha256::new()
+            .chain_points([&msg.V_i, &msg.A_i, &msg.B_i])
+            .result_bigint();
         let scheme = CommitmentScheme {
             comm: comm.clone(),
             decomm: msg.blind_factor.clone(),
         };
         if scheme.verify_hash(&input_hash)
-            && is_valid_curve_point(msg.A_i.get_element())
-            && is_valid_curve_point(msg.V_i.get_element())
+            && is_valid_curve_point(&msg.A_i)
+            && is_valid_curve_point(&msg.V_i)
         {
             Ok(())
         } else {
@@ -1326,11 +1334,11 @@ impl Phase5ab {
         msg: &Phase5Decom1,
     ) -> Result<(), SigningError> {
         let delta = HomoElGamalStatement {
-            G: msg.A_i,
-            H: self.R,
-            Y: ECPoint::generator(),
-            D: msg.V_i,
-            E: msg.B_i,
+            G: msg.A_i.clone(),
+            H: self.R.clone(),
+            Y: GE::generator().to_point(),
+            D: msg.V_i.clone(),
+            E: msg.B_i.clone(),
         };
         if msg.proof.verify(&delta).is_ok() {
             Ok(())
@@ -1341,16 +1349,16 @@ impl Phase5ab {
 
     fn compute_va(&self, decomms: &HashMap<PartyIndex, Phase5Decom1>) -> (GE, GE) {
         let (V, A) = decomms.iter().fold(
-            (self.p5_decommit.V_i, self.p5_decommit.A_i),
-            |acc, (_, msg)| (acc.0 + msg.V_i, acc.1 + msg.A_i),
+            (self.p5_decommit.V_i.clone(), self.p5_decommit.A_i.clone()),
+            |acc, (_, msg)| (acc.0 + &msg.V_i, acc.1 + &msg.A_i),
         );
 
-        let r: FE = ECScalar::from(&self.R.x_coor().unwrap().mod_floor(&FE::q()));
-        let yr = self.multi_party_info.public_key * r;
-        let g: GE = ECPoint::generator();
-        let m_fe = self.params.message_hash;
+        let r: FE = Scalar::from(&self.R.x_coord().unwrap().mod_floor(FE::group_order()));
+        let yr = &self.multi_party_info.public_key * r;
+        let g = GE::generator();
+        let m_fe = &self.params.message_hash;
         let gm = g * m_fe;
-        let V = V.sub_point(&gm.get_element()).sub_point(&yr.get_element());
+        let V = V - &gm - &yr;
         (V, A)
     }
 }
@@ -1361,8 +1369,8 @@ impl Clone for Phase5ab {
             params: self.params.clone(),
             multi_party_info: self.multi_party_info.clone(),
             other_parties: self.other_parties.clone(),
-            R: self.R,
-            sigma_i: self.sigma_i,
+            R: self.R.clone(),
+            sigma_i: self.sigma_i.clone(),
             local_sig: self.local_sig.clone(),
             p5_commit: self.p5_commit.clone(),
             p5_decommit: self.p5_decommit.clone(),
@@ -1447,8 +1455,8 @@ impl State<SigningTraits> for Phase5ab {
                                 params: self.params.clone(),
                                 shared_keys: self.multi_party_info.clone(),
                                 other_parties: self.other_parties.clone(),
-                                R: self.R,
-                                sigma_i: self.sigma_i,
+                                R: self.R.clone(),
+                                sigma_i: self.sigma_i.clone(),
                                 local_sig: self.local_sig.clone(),
                                 p5_decommit: self.p5_decommit.clone(),
                                 p5_decommitments: decomms,
@@ -1525,7 +1533,9 @@ struct Phase5cde {
 impl Phase5cde {
     fn check_comms(&self, party: &PartyIndex, msg: &Phase5Decom2) -> Result<(), SigningError> {
         let comm = self.p5_commitments2.get(party).unwrap();
-        let input_hash = Sha256::new().chain_points(&[&msg.U_i, &msg.T_i]).to_big_int();
+        let input_hash = Sha256::new()
+            .chain_points([&msg.U_i, &msg.T_i])
+            .result_bigint();
         let scheme = CommitmentScheme {
             comm: comm.clone(),
             decomm: msg.blind_factor.clone(),
@@ -1544,8 +1554,8 @@ impl Clone for Phase5cde {
             params: self.params.clone(),
             shared_keys: self.shared_keys.clone(),
             other_parties: self.other_parties.clone(),
-            R: self.R,
-            sigma_i: self.sigma_i,
+            R: self.R.clone(),
+            sigma_i: self.sigma_i.clone(),
             local_sig: self.local_sig.clone(),
             p5_commit2: self.p5_commit2.clone(),
             p5_decommit2: self.p5_decommit2.clone(),
@@ -1583,7 +1593,7 @@ impl State<SigningTraits> for Phase5cde {
                 let output = vec![OutMsg {
                     recipient: Address::Broadcast,
                     body: Message::R9(Phase5Edata {
-                        s_i: self.local_sig.s_i,
+                        s_i: self.local_sig.s_i.clone(),
                     }),
                 }];
                 Some(output)
@@ -1642,13 +1652,12 @@ impl State<SigningTraits> for Phase5cde {
                     .collect::<Vec<_>>();
 
                 let (t_sum, u_sum) = decomms.iter().fold(
-                    (self.p5_decommit2.T_i, self.p5_decommit2.U_i),
-                    |acc, (_, msg)| (acc.0 + msg.T_i, acc.1 + msg.U_i),
+                    (self.p5_decommit2.T_i.clone(), self.p5_decommit2.U_i.clone()),
+                    |acc, (_, msg)| (acc.0 + &msg.T_i, acc.1 + &msg.U_i),
                 );
 
-                let g: GE = ECPoint::generator();
-
-                if g != (g + t_sum).sub_point(&u_sum.get_element()) {
+                // TODO: use invert?
+                if &t_sum - &u_sum != GE::zero() {
                     errors.push(SigningError::Phase5ValidationFailed)
                 }
 
@@ -1685,7 +1694,7 @@ impl State<SigningTraits> for Phase5cde {
                         Ok(signature) => Transition::FinalState(Ok(SignedMessage {
                             r: signature.r,
                             s: signature.s,
-                            hash: self.params.message_hash,
+                            hash: self.params.message_hash.clone(),
                         })),
                         Err(_e) => {
                             log::error!("ECDSA signature verification error");
@@ -1714,14 +1723,14 @@ impl State<SigningTraits> for Phase5cde {
 mod tests {
 
     use crate::ecdsa::signature::{InMsg, OutMsg, Phase1, SigningTraits};
+    use crate::ecdsa::FE;
 
     use crate::ecdsa::keygen::MultiPartyInfo;
     use crate::protocol::{Address, InputMessage, PartyIndex};
     use crate::state_machine::sync_channels::StateMachine;
     use anyhow::bail;
     use crossbeam_channel::{Receiver, Sender};
-    use curv::elliptic::curves::traits::ECScalar;
-    use curv::BigInt;
+    use curv::cryptographic_primitives::hashing::DigestExt;
     use sha2::{Digest, Sha256};
     use std::path::Path;
     use std::{fs, thread};
@@ -1754,8 +1763,8 @@ mod tests {
         let mut handles = Vec::new();
 
         let mut hasher = Sha256::new();
-        hasher.input("MPC TS signing tests");
-        let msg_hash = ECScalar::from(&BigInt::from(hasher.result().as_slice()));
+        hasher.update("MPC TS signing tests");
+        let msg_hash = FE::from(hasher.result_bigint());
 
         // the valid output of keygen is stored in files keys{0,1,2}.json
         // hence the party n
@@ -1780,12 +1789,13 @@ mod tests {
             let multi_party_shared_info: MultiPartyInfo =
                 serde_json::from_str(&fs::read_to_string(path)?)?;
 
+            let msg_hash_copy = msg_hash.clone();
             assert!(!enable_range_proofs || multi_party_shared_info.range_proof_setups.is_some());
             let signing_parties = signing_parties.clone();
             log::info!("starting party {}", i);
             let join_handle = thread::spawn(move || {
                 let start_state = Box::new(Phase1::new(
-                    msg_hash,
+                    msg_hash_copy,
                     multi_party_shared_info,
                     &signing_parties,
                     None,

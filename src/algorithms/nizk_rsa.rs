@@ -20,13 +20,12 @@ pub enum NIZKError {
 use std::ops::Shl;
 
 use crate::algorithms::sha::HSha512Trunc256;
+use crate::algorithms::Powm;
 use crate::ecdsa::PRIME_BIT_LENGTH_IN_PAILLIER_SCHEMA;
-use curv::arithmetic::{BitManipulation, Converter, Zero};
-//use curv::cryptographic_primitives::hashing::traits::Hash;
+use crate::{BitManipulation, Converter, Integer, One, Zero};
 use paillier::{extract_nroot, BigInt, DecryptionKey, EncryptionKey};
 use std::borrow::Borrow;
 use std::convert::TryFrom;
-use curv::arithmetic::{Integer, One};
 
 /// Initializes the PRNG used for random sampling of points in the algorithm
 /// with the sequence of decimal digits found somewhere in Pi:
@@ -90,7 +89,7 @@ pub fn get_rho_vec(n: &BigInt) -> Vec<BigInt> {
         .map(|i| {
             (1u64..1000) // this upper limit should be never hit normally, unless gen_mask() is changed to return numbers too big
                 .map(|j| {
-                    let s = hash(&[&n, &salt, &BigInt::from(i), &BigInt::from(j)]);
+                    let s = hash(&[n, &salt, &BigInt::from(i), &BigInt::from(j)]);
                     gen_mask(key_length, &s)
                 })
                 .find(|rho| rho < n)
@@ -103,11 +102,10 @@ pub fn get_rho_vec(n: &BigInt) -> Vec<BigInt> {
 pub fn gen_proof(dk: &DecryptionKey) -> Vec<BigInt> {
     let n = dk.q.borrow() * dk.p.borrow();
 
-    let result = get_rho_vec(&n)
+    get_rho_vec(&n)
         .into_iter()
-        .map(|rho| extract_nroot(&dk, &rho))
-        .collect();
-    result
+        .map(|rho| extract_nroot(dk, &rho))
+        .collect()
 }
 
 /// Verifies non-interactive proof of correctness of public Paillier key.
@@ -131,12 +129,12 @@ pub fn verify(encryption: &EncryptionKey, sigmas: &[BigInt]) -> Result<(), NIZKE
     if !rho_correct {
         return Err(NIZKError::IncorrectRho);
     }
-    check_divisibility(&n)
+    check_divisibility(n)
 }
 
 pub fn check_divisibility(n: &BigInt) -> Result<(), NIZKError> {
-    let alpha_primorial = str::parse::<BigInt>(&PRIMORIAL).unwrap();
-    let gcd_test = alpha_primorial.gcd(&n);
+    let alpha_primorial = BigInt::from_str_radix(PRIMORIAL, 10).unwrap();
+    let gcd_test = alpha_primorial.gcd(n);
     if gcd_test == BigInt::one() {
         Ok(())
     } else {
@@ -158,7 +156,7 @@ fn gen_mask(mask_length: usize, seed: &BigInt) -> BigInt {
         u64::try_from((mask_length - 1) / DIGEST_SIZE).expect("gen_mask: parameters too large");
 
     (0..=counter)
-        .map(|i| hash(&[&seed, &BigInt::from(i)]))
+        .map(|i| hash(&[seed, &BigInt::from(i)]))
         .fold(BigInt::zero(), |acc, v| acc.shl(DIGEST_SIZE) + v)
 }
 

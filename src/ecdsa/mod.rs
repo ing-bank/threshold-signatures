@@ -9,30 +9,26 @@
 //!
 use crate::ecdsa::keygen::KeygenError;
 use crate::protocol::PartyIndex;
-use curv::arithmetic::traits::Samplable;
+use crate::BigInt;
+use crate::{BasicOps, Converter, Integer, Samplable, Zero};
+
 use curv::cryptographic_primitives::commitments::hash_commitment::HashCommitment;
 use curv::cryptographic_primitives::commitments::traits::Commitment;
+use curv::elliptic::curves::{PointFromBytesError, Secp256k1};
 
-use curv::elliptic::curves::{Point, PointFromBytesError, Scalar, Secp256k1};
-type GE = curv::elliptic::curves::Point<Secp256k1>;
-type FE = curv::elliptic::curves::Scalar<Secp256k1>;
-type ECPoint = GE;
-type ECScalar = FE;
-type PK = GE;
-type SK = FE;
-
-use curv::arithmetic::{BigInt, Zero};
-
+type Point = curv::elliptic::curves::Point<Secp256k1>;
+type Scalar = curv::elliptic::curves::Scalar<Secp256k1>;
+type GE = Point;
+type FE = Scalar;
 
 use curv::cryptographic_primitives::proofs::sigma_dlog::DLogProof;
-type CurvDLogProofType = DLogProof<Secp256k1,sha2::Sha256>;
+type CurvDLogProofType = DLogProof<Secp256k1, sha2::Sha256>;
 
 use curv::cryptographic_primitives::secret_sharing::feldman_vss::VerifiableSS;
 type CurvVerifiableSS = VerifiableSS<Secp256k1>;
 
 use curv::cryptographic_primitives::proofs::sigma_correct_homomorphic_elgamal_enc::HomoELGamalProof;
-type CurvHomoElGamalProof = HomoELGamalProof<Secp256k1,sha2::Sha256>;
-
+type CurvHomoElGamalProof = HomoELGamalProof<Secp256k1, sha2::Sha256>;
 
 //, FE, GE};
 use paillier::{
@@ -62,8 +58,8 @@ pub mod signature;
 /// * `threshold` - number of parties required to produce a signature minus 1 so that $` \min N_{required} = threshold + 1 `$  
 #[derive(Clone, Copy, Serialize, Deserialize, Debug)]
 pub struct Parameters {
-    threshold: usize,   //t
-    share_count: usize, //n
+    threshold: u16,   //t
+    share_count: u16, //n
 }
 
 impl Parameters {
@@ -74,7 +70,7 @@ impl Parameters {
     ///
     /// That is, `threshold` = `min_signers` - 1
     /// Refer to <https://eprint.iacr.org/2019/114.pdf>
-    pub fn new(min_signers: usize, share_count: usize) -> Result<Self, KeygenError> {
+    pub fn new(min_signers: u16, share_count: u16) -> Result<Self, KeygenError> {
         if share_count < 2 {
             return Err(KeygenError::IncorrectParameters(format!(
                 "Number of shares must be at least 2, got {}",
@@ -107,15 +103,15 @@ impl Parameters {
         })
     }
 
-    pub fn threshold(&self) -> usize {
+    pub fn threshold(&self) -> u16 {
         self.threshold
     }
 
-    pub fn share_count(&self) -> usize {
+    pub fn share_count(&self) -> u16 {
         self.share_count
     }
 
-    pub fn signers(&self) -> usize {
+    pub fn signers(&self) -> u16 {
         self.threshold + 1
     }
 }
@@ -154,8 +150,7 @@ impl SigningParameters {
 ///
 /// Note that EC schema keys $` u_{i}, y_{i} `$ become obsolete after the round of Shamir's sharing so that they have to be erased.
 /// Unlike these keys, Paillier keys will be used later in the signing protocol, therefore if the struct `InitialKeys` is about to be dropped or erased explicitly, Paillier keys must be copied to another location beforehand.  
-#[derive(Clone, Serialize, Deserialize, Zeroize)]
-#[zeroize(drop)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct InitialKeys {
     pub u_i: FE,
     pub y_i: GE,
@@ -175,7 +170,7 @@ impl Display for InitialKeys {
 
 impl Debug for InitialKeys {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.to_string())
+        write!(f, "{}", self)
     }
 }
 
@@ -189,7 +184,7 @@ pub struct InitialPublicKeys {
 impl InitialPublicKeys {
     pub fn from(keys: &InitialKeys) -> Self {
         Self {
-            y_i: keys.y_i,
+            y_i: keys.y_i.clone(),
             paillier_encryption_key: keys.paillier_keys.ek.clone(),
         }
     }
@@ -199,7 +194,7 @@ fn is_valid_curve_point(pk: &GE) -> bool {
     GE::from_bytes(&pk.to_bytes(false)).is_ok()
 }
 
-fn valid_public_key(pk: PK) -> Result<GE, PointFromBytesError> {
+fn valid_public_key(pk: GE) -> Result<GE, PointFromBytesError> {
     GE::from_bytes(&pk.to_bytes(false))
 }
 
@@ -275,7 +270,7 @@ impl Display for PaillierKeys {
 
 impl Debug for PaillierKeys {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.to_string())
+        write!(f, "{}", self)
     }
 }
 
@@ -285,15 +280,6 @@ impl Drop for ManagedPaillierDecryptionKey {
     fn drop(&mut self) {
         self.0.p = BigInt::zero();
         self.0.q = BigInt::zero();
-        atomic::compiler_fence(atomic::Ordering::SeqCst);
-    }
-}
-
-struct ManagedSecretKey(Box<FE>);
-
-impl Drop for ManagedSecretKey {
-    fn drop(&mut self) {
-        self.0.zeroize();
         atomic::compiler_fence(atomic::Ordering::SeqCst);
     }
 }
@@ -333,11 +319,11 @@ impl Signature {
             let u2 = &self.r * s_invert;
 
             self.r
-                == ECScalar::from(
+                == Scalar::from(
                     &(g * u1 + pubkey * &u2)
                         .x_coord()
                         .unwrap()
-                        .mod_floor(&FE::group_order()),
+                        .mod_floor(FE::group_order()),
                 )
         }
     }
@@ -357,8 +343,8 @@ impl CommitmentScheme {
     #[allow(non_snake_case)]
     fn from_GE(elem: &GE) -> Self {
         let decomm = BigInt::sample(256);
-        let comm = HashCommitment::create_commitment_with_user_defined_randomness(
-            &elem.bytes_compressed_to_big_int(),
+        let comm = HashCommitment::<sha2::Sha256>::create_commitment_with_user_defined_randomness(
+            &BigInt::from_bytes(&elem.to_bytes(true)),
             &decomm,
         );
         CommitmentScheme { comm, decomm }
@@ -368,23 +354,27 @@ impl CommitmentScheme {
     #[allow(non_snake_case)]
     fn from_BigInt(message: &BigInt) -> Self {
         let decomm = BigInt::sample(256);
-        let comm = HashCommitment::create_commitment_with_user_defined_randomness(message, &decomm);
+        let comm = HashCommitment::<sha2::Sha256>::create_commitment_with_user_defined_randomness(
+            message, &decomm,
+        );
         CommitmentScheme { comm, decomm }
     }
 
     /// verifies commitment using EC group element
-    fn verify_commitment(&self, elem: GE) -> bool {
-        is_valid_curve_point(&elem)
-            && HashCommitment::create_commitment_with_user_defined_randomness(
-                &elem.bytes_compressed_to_big_int(),
+    fn verify_commitment(&self, elem: &GE) -> bool {
+        is_valid_curve_point(elem)
+            && HashCommitment::<sha2::Sha256>::create_commitment_with_user_defined_randomness(
+                &BigInt::from_bytes(&elem.to_bytes(true)),
                 &self.decomm,
             ) == self.comm
     }
 
     /// verifies commitment using `BigInt` value
     fn verify_hash(&self, hash: &BigInt) -> bool {
-        HashCommitment::create_commitment_with_user_defined_randomness(&hash, &self.decomm)
-            == self.comm
+        HashCommitment::<sha2::Sha256>::create_commitment_with_user_defined_randomness(
+            hash,
+            &self.decomm,
+        ) == self.comm
     }
 }
 
@@ -442,19 +432,18 @@ where
 #[cfg(test)]
 mod tests {
     use crate::ecdsa::{is_beta_subset_of_alpha, is_valid_curve_point};
-    use curv::arithmetic::traits::Converter;
+    use crate::ecdsa::{BigInt, FE, GE};
     use curv::arithmetic::traits::Samplable;
-    use curv::elliptic::curves::traits::ECPoint;
-    use curv::elliptic::curves::traits::ECScalar;
-    use curv::{BigInt, FE, GE};
+    use curv::arithmetic::Converter;
+    use std::ops::Deref;
 
     fn xy_to_key_slice(x: &BigInt, y: &BigInt) -> Vec<u8> {
         let mut v = vec![4 as u8];
         let mut raw_x: Vec<u8> = Vec::new();
         let mut raw_y: Vec<u8> = Vec::new();
 
-        let x_vec = BigInt::to_vec(x);
-        let y_vec = BigInt::to_vec(y);
+        let x_vec = BigInt::to_bytes(x);
+        let y_vec = BigInt::to_bytes(y);
         raw_x.extend(vec![0u8; 32 - x_vec.len()]);
         raw_x.extend(x_vec);
 
@@ -468,33 +457,44 @@ mod tests {
 
     #[test]
     fn pk_utilities() {
-        let pk = GE::random_point().get_element();
+        let pk = GE::generator() * FE::random();
 
-        let bytes = pk.serialize_uncompressed();
-        let ppk = curv::PK::from_slice(&bytes);
+        let bytes = pk.to_bytes(false);
+        let ppk = GE::from_bytes(&bytes);
         assert!(ppk.is_ok());
         let ppk = ppk.unwrap();
         assert_eq!(pk, ppk);
 
-        assert!(is_valid_curve_point(GE::random_point().get_element()));
+        assert!(is_valid_curve_point(&pk));
 
         let xpk = xy_to_key_slice(
-            &BigInt::sample_below(&FE::q()),
-            &BigInt::sample_below(&FE::q()),
+            &BigInt::sample_below(&FE::group_order()),
+            &BigInt::sample_below(&FE::group_order()),
         );
 
-        let xppk = curv::PK::from_slice(xpk.as_slice());
+        let xppk = GE::from_bytes(xpk.as_slice());
         assert!(xppk.is_err());
     }
 
     #[test]
+    fn pk_comparison() {
+        let pk = GE::generator() * FE::random();
+
+        let ppk = pk.clone();
+        assert!(pk == ppk);
+
+        let p_addr = &pk as *const _;
+        let pp_addr = &ppk as *const _;
+        assert_ne!(p_addr, pp_addr);
+    }
+
+    #[test]
     fn pk_conversion() {
-        let pk = GE::random_point().get_element();
-        let bytes = pk.serialize_uncompressed();
-        let ge = GE::from_bytes(&bytes[1..]);
+        let pk = GE::generator() * FE::random();
+        let bytes = pk.to_bytes(true);
+        let ge = GE::from_bytes(bytes.deref());
         assert!(ge.is_ok());
-        let ge = ge.unwrap();
-        assert_eq!(pk, ge.get_element());
+        assert_eq!(pk, ge.unwrap());
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use anyhow::{anyhow, bail};
 use crossbeam_channel::{Receiver, Sender};
-use curv::elliptic::curves::secp256_k1::Secp256k1Scalar;
+use curv::elliptic::curves::{Scalar, Secp256k1};
 use ecdsa_mpc::algorithms::zkp::{ZkpSetup, DEFAULT_GROUP_ORDER_BIT_LENGTH};
 use ecdsa_mpc::ecdsa::keygen::{
     FinalState, KeyGeneratorTraits, Phase1, SecretKeyLoader, SecretKeyLoaderError,
@@ -42,14 +42,14 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn keygen_helper(
-    min_signers: usize,
-    share_count: usize,
+    min_signers: u16,
+    share_count: u16,
     filename_prefix: &String,
     generate_range_proof_setup: bool,
 ) -> anyhow::Result<()> {
     let params = Parameters::new(min_signers, share_count)?;
 
-    let parties = (0..share_count)
+    let parties = (0..share_count as usize)
         .map(|i| PartyIndex::from(i))
         .collect::<Vec<_>>();
 
@@ -58,7 +58,7 @@ fn keygen_helper(
     let wallet = Wallet::new(HashMap::new());
     let shared_wallet_reference = Arc::new(Mutex::new(wallet));
 
-    for i in 0..share_count {
+    for i in 0..share_count as usize {
         let range_proof_setup = if generate_range_proof_setup {
             Some(ZkpSetup::random(DEFAULT_GROUP_ORDER_BIT_LENGTH))
         } else {
@@ -230,7 +230,7 @@ impl SecretKeyLoaderImpl {
 }
 
 impl SecretKeyLoader for SecretKeyLoaderImpl {
-    fn get_initial_secret(&self) -> Result<Box<Secp256k1Scalar>, SecretKeyLoaderError> {
+    fn get_initial_secret(&self) -> Result<Box<Scalar<Secp256k1>>, SecretKeyLoaderError> {
         let wallet = self
             .wallet
             .lock()
@@ -241,7 +241,8 @@ impl SecretKeyLoader for SecretKeyLoaderImpl {
                 .records
                 .get(&self.key_index)
                 .ok_or(SecretKeyLoaderError("key not found".to_string()))?
-                .u_i,
+                .u_i
+                .clone(),
         ))
     }
 

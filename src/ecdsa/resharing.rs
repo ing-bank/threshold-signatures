@@ -128,7 +128,7 @@ fn map_parties_to_shares(
     outgoing_shares: &[FE],
 ) -> HashMap<PartyIndex, SecretShare> {
     assert_eq!(outgoing_shares.len(), parties.len()); // hence unwrap() safely
-    let outgoing_shares = (1..=outgoing_shares.len())
+    let outgoing_shares = (1..=outgoing_shares.len() as u16)
         .zip(outgoing_shares.iter())
         .collect::<Vec<_>>();
 
@@ -137,7 +137,7 @@ fn map_parties_to_shares(
     party_indexes_ascending
         .iter()
         .zip(outgoing_shares.iter())
-        .map(|(party, share)| (**party, (share.0, *share.1)))
+        .map(|(party, share)| (**party, (share.0, (*share.1).clone())))
         .collect::<HashMap<_, _>>()
 }
 
@@ -149,20 +149,19 @@ pub mod old_member {
     use crate::ecdsa::messages::resharing::{InMsg, Message, OutMsg, Phase1Broadcast, VSS};
 
     use crate::ecdsa::resharing::{map_parties_to_shares, ResharingError};
+    use crate::ecdsa::{BigInt, CurvVerifiableSS, FE, GE};
     use crate::protocol::{Address, PartyIndex};
     use crate::state_machine::{State, StateMachineTraits, Transition};
     use crate::Parameters;
-    use sha2::{Digest, Sha256};
     use curv::cryptographic_primitives::hashing::DigestExt;
     use curv::cryptographic_primitives::secret_sharing::feldman_vss::VerifiableSS;
-    use crate::ecdsa::{ECPoint, ECScalar, BigInt, FE, GE, CurvVerifiableSS};
+    use sha2::{Digest, Sha256};
 
     use std::cell::RefCell;
     use std::collections::BTreeSet;
     use std::iter::FromIterator;
     use std::time::Duration;
     use trace::trace;
-    use zeroize::Zeroize;
 
     #[derive(Clone, Debug, super::Serialize, super::Deserialize)]
     pub struct FinalState;
@@ -207,24 +206,24 @@ pub mod old_member {
             timeout: Option<Duration>,
         ) -> Result<Self, ResharingError> {
             //check if old committee is sized correctly
-            if old_committee.len() <= multi_party_info.key_params.threshold() {
+            if old_committee.len() as u16 <= multi_party_info.key_params.threshold() {
                 return Err(ResharingError::ProtocolSetupError(
                     "old committee too small".to_string(),
                 ));
             }
-            if old_committee.len() > multi_party_info.key_params.share_count() {
+            if old_committee.len() as u16 > multi_party_info.key_params.share_count() {
                 return Err(ResharingError::ProtocolSetupError(
                     "old committee too big".to_string(),
                 ));
             }
 
             // check if new committee is sized correctly
-            if new_committee.len() <= new_params.threshold() {
+            if new_committee.len() as u16 <= new_params.threshold() {
                 return Err(ResharingError::ProtocolSetupError(
                     "new committee too small".to_string(),
                 ));
             }
-            if new_committee.len() > new_params.share_count() {
+            if new_committee.len() as u16 > new_params.share_count() {
                 return Err(ResharingError::ProtocolSetupError(
                     "new committee too big".to_string(),
                 ));
@@ -238,23 +237,26 @@ pub mod old_member {
                 ));
             }
 
-            let own_x: FE = ECScalar::from(&BigInt::from(multi_party_info.own_point() as u64));
+            let own_x = FE::from(&BigInt::from(multi_party_info.own_point() as u64));
             let multiplier = multi_party_info
                 .party_to_point_map
                 .calculate_lagrange_multiplier(old_committee, own_x);
             let w_i = multi_party_info.own_share() * multiplier;
 
-            let (vss_scheme, outgoing_shares) =
-                VerifiableSS::share(new_params.threshold, new_params.share_count, &w_i);
+            let (vss_scheme, outgoing_shares) = VerifiableSS::share(
+                new_params.threshold as u16,
+                new_params.share_count as u16,
+                &w_i,
+            );
             let vss_refs = vss_scheme.commitments.iter().collect::<Vec<_>>();
-            let vss_comm = Sha256::new().chain_points(&vss_refs).to_big_int();
+            let vss_comm = Sha256::new().chain_points(vss_refs).result_bigint();
 
             Ok(Phase1 {
                 new_committee: new_parties_as_set,
                 vss_scheme,
-                outgoing_shares,
+                outgoing_shares: (*outgoing_shares).to_vec(),
                 vss_comm,
-                y: multi_party_info.public_key,
+                y: multi_party_info.public_key.clone(),
                 timeout,
             })
         }
@@ -271,7 +273,7 @@ pub mod old_member {
                 .map(|p| OutMsg {
                     recipient: Address::Peer(*p),
                     body: Message::R1(Phase1Broadcast {
-                        y: self.y,
+                        y: self.y.clone(),
                         vss_commitment: self.vss_comm.clone(),
                     }),
                 })
@@ -321,16 +323,6 @@ pub mod old_member {
         timeout: Option<Duration>,
     }
 
-    impl Phase2 {
-        fn zeroize_secret_shares(&self) {
-            // Simultaneously remove and zeroize elements.
-            self.outgoing_shares
-                .borrow_mut()
-                .drain(..)
-                .for_each(|mut share| share.zeroize());
-        }
-    }
-
     #[trace(pretty, prefix = "Phase2::")]
     impl State<KeyResharingTraits> for Phase2 {
         fn start(&mut self) -> Option<Vec<OutMsg>> {
@@ -365,7 +357,6 @@ pub mod old_member {
 
         fn consume(&self, _current_msg_set: Vec<InMsg>) -> Transition<KeyResharingTraits> {
             log::info!("Phase2 succeeded");
-            self.zeroize_secret_shares();
             Transition::FinalState(Ok(FinalState {}))
         }
 
@@ -398,10 +389,10 @@ pub mod new_member {
     use crate::state_machine::{State, StateMachineTraits, Transition};
     use crate::Parameters;
 
-    use sha2::{Digest, Sha256};
     use curv::cryptographic_primitives::hashing::DigestExt;
+    use sha2::{Digest, Sha256};
 
-    use crate::ecdsa::{ECPoint, ECScalar, BigInt, FE, GE};
+    use crate::ecdsa::{BigInt, FE, GE};
 
     use paillier::{EncryptionKey, KeyGeneration, Paillier};
 
@@ -440,6 +431,7 @@ pub mod new_member {
     /// * collects commitments to public key and to Feldman's VSS
     /// * verifies that all public keys are same
     #[derive(Clone, Debug)]
+    #[allow(dead_code)]
     pub struct Phase1 {
         old_params: Parameters,
         new_params: Parameters,
@@ -462,24 +454,24 @@ pub mod new_member {
             timeout: Option<Duration>,
         ) -> Result<Self, ResharingError> {
             // check if old committee is sized correctly
-            if old_committee.len() <= old_params.threshold() {
+            if old_committee.len() as u16 <= old_params.threshold() {
                 return Err(ResharingError::ProtocolSetupError(
                     "old committee too small".to_string(),
                 ));
             }
-            if old_committee.len() > old_params.share_count() {
+            if old_committee.len() as u16 > old_params.share_count() {
                 return Err(ResharingError::ProtocolSetupError(
                     "old committee too big".to_string(),
                 ));
             }
 
             // check if new committee is sized correctly
-            if new_committee.len() <= new_params.threshold() {
+            if new_committee.len() as u16 <= new_params.threshold() {
                 return Err(ResharingError::ProtocolSetupError(
                     "new committee too small".to_string(),
                 ));
             }
-            if new_committee.len() > new_params.share_count() {
+            if new_committee.len() as u16 > new_params.share_count() {
                 return Err(ResharingError::ProtocolSetupError(
                     "new committee too big".to_string(),
                 ));
@@ -551,7 +543,7 @@ pub mod new_member {
                     }
 
                     let different_public_keys = !all_mapped_equal(input.iter(), |(_, msg)| {
-                        msg.y.bytes_compressed_to_big_int()
+                        (msg.y.x_coord(), msg.y.y_coord())
                     });
                     if different_public_keys {
                         let error_state =
@@ -565,7 +557,7 @@ pub mod new_member {
                         2 * PRIME_BIT_LENGTH_IN_PAILLIER_SCHEMA,
                     )
                     .keys();
-                    let y = input.iter().next().map(|(_, msg)| msg.y).unwrap();
+                    let y = input.iter().next().map(|(_, msg)| msg.y.clone()).unwrap();
                     let vss_comms = input
                         .into_iter()
                         .map(|(p, m)| (p, m.vss_commitment))
@@ -674,7 +666,7 @@ pub mod new_member {
                 .previous_phase
                 .range_proof_setup
                 .as_ref()
-                .map(|s| ZkpPublicSetup::from_private_zkp_setup(s));
+                .map(ZkpPublicSetup::from_private_zkp_setup);
             let proof = nizk_rsa::gen_proof(&self.my_paillier_keys.dk);
             #[allow(clippy::if_not_else)]
             let output = self
@@ -848,7 +840,7 @@ pub mod new_member {
                         input.iter().next().map(|(_, vss)| vss.share.0).unwrap(),
                         input
                             .iter()
-                            .fold(FE::zero(), |acc, (_, vss)| acc + vss.share.1),
+                            .fold(FE::zero(), |acc, (_, vss)| acc + &vss.share.1),
                     );
 
                     // check commitment errors
@@ -857,7 +849,7 @@ pub mod new_member {
                         .filter_map(|(p, vss)| {
                             let ((_, x_i), vss) = (vss.share, vss.vss);
                             let vss_refs = vss.commitments.iter().collect::<Vec<_>>();
-                            let decomm = Sha256::new().chain_points(&vss_refs).to_big_int();
+                            let decomm = Sha256::new().chain_points(vss_refs).result_bigint();
                             match self.previous_phase.vss_comms.get(&p) {
                                 Some(comm) => {
                                     if *comm == decomm {
@@ -923,7 +915,6 @@ pub mod new_member {
             log::debug!("Phase4 (new member) starts");
             let self_setup = &self.previous_phase.previous_phase.previous_phase;
             Some(
-                #[allow(clippy::filter_map)]
                 self_setup
                     .old_committee
                     .iter()
@@ -994,8 +985,8 @@ pub mod new_member {
                         .previous_phase
                         .previous_phase
                         .own_party_index,
-                    secret_share: self.share,
-                    public_key: self.previous_phase.previous_phase.y,
+                    secret_share: self.share.clone(),
+                    public_key: self.previous_phase.previous_phase.y.clone(),
                     own_he_keys: self.previous_phase.previous_phase.my_paillier_keys.clone(),
                     party_he_keys: self.previous_phase.other_paillier_keys.clone(),
                     party_to_point_map: party_mapping_to_points,
@@ -1028,14 +1019,14 @@ mod tests {
     use crate::ecdsa::resharing::new_member::KeyResharingTraits;
     use crate::ecdsa::resharing::old_member::KeyResharingTraits as OldKeyResharingTraits;
     use crate::ecdsa::resharing::{InMsg, OutMsg};
+    use crate::ecdsa::{BigInt, FE, GE};
     use crate::protocol::{Address, InputMessage, PartyIndex};
     use crate::state_machine::sync_channels::StateMachine;
     use crate::Parameters;
     use anyhow::bail;
     use crossbeam_channel::{Receiver, Sender};
     use curv::cryptographic_primitives::secret_sharing::feldman_vss::VerifiableSS;
-    use curv::elliptic::curves::traits::{ECPoint, ECScalar};
-    use curv::{BigInt, FE, GE};
+
     use std::path::Path;
     use std::{fs, thread};
 
@@ -1336,20 +1327,20 @@ mod tests {
         // reconstruct the secret
         let secret_shares = new_final_states
             .iter()
-            .map(|fs| fs.info.secret_share)
+            .map(|fs| fs.info.secret_share.clone())
             .collect::<Vec<_>>();
 
         let reconstructed_private_key = reconstruct(&secret_shares);
         let old_public_key = new_final_states
             .iter()
-            .map(|s| s.info.public_key)
-            .collect::<Vec<_>>()[0];
-        let g: GE = ECPoint::generator();
+            .map(|s| s.info.public_key.clone())
+            .collect::<Vec<_>>()[0]
+            .clone();
+        let g = GE::generator();
         let new_public_key = g * reconstructed_private_key;
 
         assert_eq!(
-            new_public_key.get_element(),
-            old_public_key.get_element(),
+            new_public_key, old_public_key,
             "new private key key does not match odl public key"
         );
 
@@ -1361,8 +1352,8 @@ mod tests {
             .iter()
             .map(|(x, y)| {
                 let index_bn = BigInt::from(*x as u64);
-                let x_coord: FE = ECScalar::from(&index_bn);
-                (x_coord, y)
+                let x_coord = FE::from(&index_bn);
+                (x_coord, y.clone())
             })
             .unzip();
         VerifiableSS::lagrange_interpolation_at_zero(&points, &shares)

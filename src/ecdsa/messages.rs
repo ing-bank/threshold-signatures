@@ -3,11 +3,10 @@
 #![allow(non_snake_case)]
 #![allow(clippy::large_enum_variant)]
 
-use crate::ecdsa::{FE,GE,BigInt};
+use crate::ecdsa::CurvVerifiableSS;
+use crate::ecdsa::{BigInt, FE, GE};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
-use crate::ecdsa::CurvVerifiableSS;
-use crate::ecdsa::CurvHomoElGamalProof;
 
 /// key generation related message data types
 pub mod keygen {
@@ -16,9 +15,9 @@ pub mod keygen {
     use crate::ecdsa::keygen::CorrectKeyProof;
     use crate::ecdsa::messages::FeldmanVSS;
 
+    use crate::ecdsa::CurvDLogProofType;
     use paillier::EncryptionKey;
     use serde::{Deserialize, Serialize};
-    use crate::ecdsa::CurvDLogProofType;
 
     /// Enumerates messages used by key generation algorithm
     #[derive(Debug, Clone, Deserialize, Serialize, Display)]
@@ -102,10 +101,10 @@ pub mod keygen {
 pub mod signing {
     use super::{BigInt, FE, GE};
     use crate::algorithms::zkp::{MessageA, MessageB};
-    use curv::cryptographic_primitives::proofs::sigma_correct_homomorphic_elgamal_enc::HomoELGamalProof;
+    //use curv::cryptographic_primitives::proofs::sigma_correct_homomorphic_elgamal_enc::HomoELGamalProof;
 
-    use serde::{Deserialize, Serialize};
     use crate::ecdsa::{CurvDLogProofType, CurvHomoElGamalProof};
+    use serde::{Deserialize, Serialize};
 
     pub type InMsg = crate::protocol::InputMessage<Message>;
     pub type OutMsg = crate::protocol::OutputMessage<Message>;
@@ -128,19 +127,19 @@ pub mod signing {
     }
 
     /// Commitment to $` V_{i} , \space A_{i} `$, see `Phase5A` in the paper
-    #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+    #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
     pub struct Phase5Com1 {
         pub com: BigInt,
     }
 
     /// Commitment to $` U_{i}, \space T_{i} `$, see `Phase5C` in the paper
-    #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+    #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
     pub struct Phase5Com2 {
         pub com: BigInt,
     }
 
     /// Decommitment to $` V_{i} , \space A_{i} `$ and ZKP of it, see Phase 5B in the paper
-    #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize)]
     pub struct Phase5Decom1 {
         pub V_i: GE,
         pub A_i: GE,
@@ -277,14 +276,13 @@ pub mod resharing {
     use crate::algorithms::zkp::ZkpPublicSetup;
     use crate::ecdsa::keygen::CorrectKeyProof;
     use crate::ecdsa::messages::SecretShare;
-    use curv::cryptographic_primitives::secret_sharing::feldman_vss::VerifiableSS;
+    //use curv::cryptographic_primitives::secret_sharing::feldman_vss::VerifiableSS;
 
-    type GE = curv::elliptic::curves::secp256_k1::Secp256k1Point;
     use curv::arithmetic::BigInt;
 
+    use crate::ecdsa::{CurvVerifiableSS, GE};
     use paillier::EncryptionKey;
     use serde::{Deserialize, Serialize};
-    use crate::ecdsa::CurvVerifiableSS;
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct Phase1Broadcast {
@@ -356,7 +354,7 @@ pub mod resharing {
 /// Shamir's secret share
 ///
 /// Contains x and y-coordinate of the point
-pub type SecretShare = (usize, FE);
+pub type SecretShare = (u16, FE);
 
 /// The message by which the Shamir's secret share and its verifiable proof is shared with a counterparty
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -369,10 +367,14 @@ impl Zeroize for FeldmanVSS {
     fn zeroize(&mut self) {
         self.vss.parameters.threshold.zeroize();
         self.vss.parameters.share_count.zeroize();
-        self.vss.commitments.drain(..).for_each(|mut c| c.zeroize());
+        self.vss
+            .commitments
+            .drain(..)
+            .for_each(|c| c.into_raw().zeroize());
 
-        self.share.0.zeroize();
-        self.share.1.zeroize();
+        // TODO: zeroize
+        //self.share.0.zeroize();
+        //self.share.1.into_raw().underlying_ref().zeroize();
     }
 }
 
@@ -384,8 +386,8 @@ impl Drop for FeldmanVSS {
 
 impl FeldmanVSS {
     pub fn verify(&self, pubkey: &GE) -> bool {
-        let valid = self.vss.validate_share(&self.share.1, &self.share.0).is_ok();
-        let pubkey_valid = self.vss.commitments[0] == pubkey;
+        let valid = self.vss.validate_share(&self.share.1, self.share.0).is_ok();
+        let pubkey_valid = self.vss.commitments[0] == *pubkey;
         if valid && pubkey_valid {
             log::debug!("validated FVSS {:?}\n", &self);
         } else {
