@@ -106,7 +106,6 @@ where
 // the underlying GMP call is NOT powm_sec(),
 // and inner object is private
 impl Powm for BigInt {
-
     #![allow(clippy::needless_arbitrary_self_type)]
     fn powm_sec(self: &Self, exponent: &Self, modulus: &Self) -> Self {
         assert!(exponent >= &BigInt::zero(), "exponent must be non-negative");

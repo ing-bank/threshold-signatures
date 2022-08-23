@@ -36,7 +36,6 @@ impl PartyIndex {
     }
 }
 
-
 impl Display for PartyIndex {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         self.write_as_hex_str(f)
