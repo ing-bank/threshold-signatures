@@ -15,7 +15,7 @@ use std::fmt::{Debug, Display};
 ///
 /// Abstract index whose binding to a network address has to be defined outside of the crate.
 /// Uses 32 byte slice to fit a public 256 bit key of an elliptic curve schema.
-#[derive(Clone, Copy, Hash, Eq, PartialEq)]
+#[derive(Clone, Copy, Hash, Eq, PartialEq, Default)]
 pub struct PartyIndex(pub [u8; 32]);
 
 impl PartyIndex {
@@ -36,11 +36,6 @@ impl PartyIndex {
     }
 }
 
-impl Default for PartyIndex {
-    fn default() -> Self {
-        PartyIndex([0u8; 32])
-    }
-}
 
 impl Display for PartyIndex {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {

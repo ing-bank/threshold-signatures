@@ -864,7 +864,7 @@ impl State<KeyGeneratorTraits> for Phase3 {
             .map(|(p, share_xy)| (*p, share_xy.0))
             .collect();
 
-        let new_state = Transition::NewState(Box::new(Phase4 {
+        Transition::NewState(Box::new(Phase4 {
             own_party_index: self.own_party_index,
             other_parties: self.other_parties.clone(),
             multiparty_shared: MultiPartyInfo {
@@ -881,8 +881,7 @@ impl State<KeyGeneratorTraits> for Phase3 {
                 range_proof_setups: self.range_proof_setups.clone(),
             },
             timeout: self.timeout,
-        }));
-        new_state
+        }))
     }
 
     fn timeout_outcome(&self, _current_msg_set: Vec<InMsg>) -> MachineResult {

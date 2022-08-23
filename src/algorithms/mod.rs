@@ -27,10 +27,9 @@ pub fn sample_generator_from_cyclic_group(
     let One = BigInt::one();
     loop {
         let alpha = BigInt::sample_below(modulo);
-        if order_factorization
+        if !order_factorization
             .iter()
-            .find(|&&x| alpha.powm_sec(&(order / x), modulo.borrow()) == One)
-            .is_none()
+            .any(|&x| alpha.powm_sec(&(order / x), modulo) == One)
         {
             return alpha;
         }
@@ -99,11 +98,16 @@ trait Powm
 where
     Self: Sized,
 {
+    #![allow(clippy::needless_arbitrary_self_type)]
     fn powm_sec(self: &Self, exponent: &Self, modulus: &Self) -> Self;
 }
 
+// this is quick & dirty fix:
+// the underlying GMP call is NOT powm_sec(),
+// and inner object is private
 impl Powm for BigInt {
-    // this is quick & dirty fix: the underlying GMP call is NOT secure!!!
+
+    #![allow(clippy::needless_arbitrary_self_type)]
     fn powm_sec(self: &Self, exponent: &Self, modulus: &Self) -> Self {
         assert!(exponent >= &BigInt::zero(), "exponent must be non-negative");
         BigInt::mod_pow(self, exponent, modulus)
