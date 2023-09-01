@@ -1,7 +1,7 @@
 # Multiparty threshold ECDSA scheme
 
 # Warning
-This repository is no longer maintained. There are known security issues as pointed [in this article.](https://www.verichains.io/tsshock/) No updates or fixes actively being pursued. The library was implemented for research purposes and not used in production within the organization. 
+This repository is no longer maintained. There are known security issues as pointed [in this article.](https://www.verichains.io/tsshock/) No updates or fixes actively being pursued. The library was implemented for research purposes and not used in production within the organization. ING strongly advises that you do NOT use this library in your code and use this code ONLY as a reference for research.
 
 ## Introduction
 
